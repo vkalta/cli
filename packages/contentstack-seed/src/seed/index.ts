@@ -19,18 +19,22 @@ const DEFAULT_STACK_PATTERN = 'stack-';
 export const ENGLISH_LOCALE = 'en-us';
 
 export interface ContentModelSeederOptions {
+  parent?: any;
   cdaHost: string;
   cmaHost: string;
-  authToken: string;
   gitHubPath: string | undefined;
   orgUid: string | undefined;
   stackUid: string | undefined;
   stackName: string | undefined;
   fetchLimit: string | undefined;
   skipStackConfirmation: string | undefined;
+  isAuthenticated: boolean | false;
+  managementToken?: string | undefined;
+  alias?: string | undefined;
 }
 
 export default class ContentModelSeeder {
+  private readonly parent: any = null;
   private readonly csClient: ContentstackClient;
 
   private readonly ghClient: GitHubClient;
@@ -40,19 +44,22 @@ export default class ContentModelSeeder {
   private ghUsername: string = DEFAULT_OWNER;
 
   private ghRepo: string | undefined;
+  managementToken?: string | undefined;
 
   get ghPath(): string {
     return `${this.ghUsername}/${this.ghRepo}`;
   }
 
   constructor(public options: ContentModelSeederOptions) {
+    this.parent = options.parent || null;
     this._options = options;
     const gh = GitHubClient.parsePath(options.gitHubPath);
     this.ghUsername = gh.username || DEFAULT_OWNER;
     this.ghRepo = gh.repo;
     const limit = Number(this.options.fetchLimit);
+    this.managementToken = options.managementToken;
 
-    this.csClient = new ContentstackClient(options.cmaHost, options.authToken, limit);
+    this.csClient = new ContentstackClient(options.cmaHost, limit);
     this.ghClient = new GitHubClient(this.ghUsername, DEFAULT_STACK_PATTERN);
   }
 
@@ -75,36 +82,61 @@ export default class ContentModelSeeder {
 
     const tmpPath = await this.downloadRelease();
 
-    cliux.print(`Importing into '${stackResponse.name}'.`);
+    cliux.print(`Importing into ${this.managementToken ? 'your stack' : `'${stackResponse.name}'`}.`);
 
     await importer.run({
       api_key: api_key,
-      authToken: this.options.authToken,
       cdaHost: this.options.cdaHost,
       cmaHost: this.options.cmaHost,
       master_locale: ENGLISH_LOCALE,
       tmpPath: tmpPath,
+      isAuthenticated: this.options.isAuthenticated,
+      alias: this.options.alias,
     });
     return { api_key };
   }
 
-  async getInput(): Promise<{
-    organizationResponse: Organization,
-    stackResponse: InquireStackResponse
-  } | any> {
+  async getInput(): Promise<
+    | {
+        organizationResponse: Organization;
+        stackResponse: InquireStackResponse;
+      }
+    | any
+  > {
     if (!this.ghRepo) {
       await this.inquireGitHubRepo();
     }
-    const repoExists = await this.ghClient.checkIfRepoExists(this.ghRepo as string);
+
+    let repoExists = false;
+    let repoResponseData: any = {};
+    try {
+      const repoCheckResult = await this.ghClient.makeGetApiCall(this.ghRepo as string);
+      repoExists = repoCheckResult.statusCode === 200;
+      repoResponseData = { status: repoCheckResult.statusCode, statusMessage: repoCheckResult.statusMessage };
+    } catch (error) {
+      throw error;
+    }
 
     if (repoExists === false) {
-      cliux.error(`Could not find GitHub repository '${this.ghPath}'.`);
+      cliux.error(
+        repoResponseData.status === 403
+          ? repoResponseData.statusMessage
+          : `Could not find GitHub repository '${this.ghPath}'.`,
+      );
+      if (this.parent) this.parent.exit(1);
     } else {
       let organizationResponse: Organization | undefined;
       let stackResponse: InquireStackResponse;
-
-      if (this.options.stackUid) {
-        const stack: Stack = await this.csClient.getStack(this.options.stackUid);
+      let stack: Stack;
+      if (this.options.stackUid && this.options.managementToken) {
+        stackResponse = {
+          isNew: false,
+          name: 'your stack',
+          uid: this.options.stackUid,
+          api_key: this.options.stackUid,
+        };
+      } else if (this.options.stackUid) {
+        stack = await this.csClient.getStack(this.options.stackUid);
         stackResponse = {
           isNew: false,
           name: stack.name,
@@ -147,7 +179,8 @@ export default class ContentModelSeeder {
   }
 
   async shouldProceed(api_key: string) {
-    const count = await this.csClient.getContentTypeCount(api_key);
+    let count;
+    count = await this.csClient.getContentTypeCount(api_key, this.managementToken);
 
     if (count > 0 && this._options.skipStackConfirmation !== 'yes') {
       const proceed = await inquireProceed();

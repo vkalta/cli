@@ -21,8 +21,8 @@ describe('Migration Config validation', () => {
   getTokenCallback
     .withArgs('test1')
     .returns({
-      token: 'cs2f6c60355c432bc95972e068',
-      apiKey: 'blt1f36f82ccc346cc5',
+      token: 'testManagementToken',
+      apiKey: 'testApiKey',
       type: 'management',
     })
     .withArgs('invalidAlias')
@@ -263,8 +263,8 @@ describe('Content Type with Single RTE Field of Single Type', function () {
   });
   const getTokenCallback = sinon.stub();
   getTokenCallback.withArgs('test1').returns({
-    token: 'cs2f6c60355c432bc95972e068',
-    apiKey: 'blt1f36f82ccc346cc5',
+    token: 'testManagementToken',
+    apiKey: 'testApiKey',
     type: 'management',
   });
 
@@ -536,6 +536,16 @@ describe('Content Type with Single RTE Field of Single Type', function () {
         `Faced issue while migrating some entrie(s) for "contenttypewithentryupdateerror" Content-type in "en-us" locale,"blta9b16ac2827c54ed, blta9b16ac2827c54e1"`,
       );
     });
+
+    test
+    .stub(cliux, 'confirm', () => 'yes')
+    .stub(command, 'getToken', getTokenCallback)
+    .stdout()
+    .command(['cm:entries:migrate-html-rte', '--config-path', './test/dummy/config/config-for-images-in-rte.json', '--yes'])
+    .it('should have proper json structure for images migrated from HTML RTE', (ctx) => {
+      expect(ctx.stdout).to.contain('Updated 1 Content Type(s) and 1 Entrie(s)');
+    });
+    
 });
 describe('Global Field Migration', () => {
   let token = getToken('test1');
@@ -559,8 +569,8 @@ describe('Global Field Migration', () => {
 
   const getTokenCallback = sinon.stub();
   getTokenCallback.withArgs('test1').returns({
-    token: 'cs2f6c60355c432bc95972e068',
-    apiKey: 'blt1f36f82ccc346cc5',
+    token: 'testManagementToken',
+    apiKey: 'testApiKey',
     type: 'management',
   });
   test
@@ -700,8 +710,8 @@ describe('Global Field Migration', () => {
 describe('Content Type with single rte of multiple type', () => {
   const getTokenCallback = sinon.stub();
   getTokenCallback.withArgs('test1').returns({
-    token: 'cs2f6c60355c432bc95972e068',
-    apiKey: 'blt1f36f82ccc346cc5',
+    token: 'testManagementToken',
+    apiKey: 'testApiKey',
     type: 'management',
   });
   test
@@ -717,8 +727,8 @@ describe('Content Type with single rte of multiple type', () => {
 describe('Content Type with Single RTE inside modular block', () => {
   const getTokenCallback = sinon.stub();
   getTokenCallback.withArgs('test1').returns({
-    token: 'cs2f6c60355c432bc95972e068',
-    apiKey: 'blt1f36f82ccc346cc5',
+    token: 'testManagementToken',
+    apiKey: 'testApiKey',
     type: 'management',
   });
   test
@@ -747,8 +757,8 @@ describe('Content Type with Single RTE inside modular block', () => {
 describe('Content Type with Single RTE of type multiple inside group', () => {
   const getTokenCallback = sinon.stub();
   getTokenCallback.withArgs('test1').returns({
-    token: 'cs2f6c60355c432bc95972e068',
-    apiKey: 'blt1f36f82ccc346cc5',
+    token: 'testManagementToken',
+    apiKey: 'testApiKey',
     type: 'management',
   });
   test
@@ -777,8 +787,8 @@ describe('Content Type with Single RTE of type multiple inside group', () => {
 describe('Content Type with Single RTE inside group of type multiple', () => {
   const getTokenCallback = sinon.stub();
   getTokenCallback.withArgs('test1').returns({
-    token: 'cs2f6c60355c432bc95972e068',
-    apiKey: 'blt1f36f82ccc346cc5',
+    token: 'testManagementToken',
+    apiKey: 'testApiKey',
     type: 'management',
   });
   test
@@ -807,8 +817,8 @@ describe('Content Type with Single RTE inside group of type multiple', () => {
 describe('Content Type with multiple file field', () => {
   const getTokenCallback = sinon.stub();
   getTokenCallback.withArgs('test1').returns({
-    token: 'cs2f6c60355c432bc95972e068',
-    apiKey: 'blt1f36f82ccc346cc5',
+    token: 'testManagementToken',
+    apiKey: 'testApiKey',
     type: 'management',
   });
   test
@@ -837,8 +847,8 @@ describe('Content Type with multiple file field', () => {
 describe('Migration with old flags and command', () => {
   const getTokenCallback = sinon.stub();
   getTokenCallback.withArgs('test1').returns({
-    token: 'cs2f6c60355c432bc95972e068',
-    apiKey: 'blt1f36f82ccc346cc5',
+    token: 'testManagementToken',
+    apiKey: 'testApiKey',
     type: 'management',
   });
 

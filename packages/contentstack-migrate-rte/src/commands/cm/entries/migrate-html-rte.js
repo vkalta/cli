@@ -1,5 +1,5 @@
-const { Command, flags } = require('@contentstack/cli-command');
-const { printFlagDeprecation } = require('@contentstack/cli-utilities');
+const { Command } = require('@contentstack/cli-command');
+const { printFlagDeprecation, flags } = require('@contentstack/cli-utilities');
 const { isEmpty } = require('lodash');
 const chalk = require('chalk');
 let {
@@ -8,20 +8,27 @@ let {
   getToken,
   updateSingleContentTypeEntries,
   updateContentTypeForGlobalField,
-  normalizeFlags
+  normalizeFlags,
 } = require('../../../lib/util');
 
 class JsonMigrationCommand extends Command {
   async run() {
-    const migrateRteFlags = this.parse(JsonMigrationCommand).flags;
+    const { flags: migrateRteFlags } = await this.parse(JsonMigrationCommand);
     try {
       const normalizedFlags = normalizeFlags(migrateRteFlags);
       let config = await getConfig(normalizedFlags);
       if (isEmpty(config.paths)) {
         throw new Error('No value provided for the "paths" property in config.');
       }
-      const token = getToken(config.alias);
-      let stack = getStack({ token: token, host: this.cmaHost });
+      const stackOptions = { host: this.cmaHost };
+      if (config.alias) {
+        stackOptions.token = getToken(config.alias)
+      }
+      if (config['stack-api-key']) {
+        stackOptions.stackApiKey = config['stack-api-key']
+      }
+      if (config.branch) stackOptions.branch = config.branch;
+      let stack = await getStack(stackOptions);
       config.entriesCount = 0;
       config.contentTypeCount = 0;
       config.errorEntriesUid = {};
@@ -33,12 +40,18 @@ class JsonMigrationCommand extends Command {
       console.log(
         chalk.green(`\nUpdated ${config.contentTypeCount} Content Type(s) and ${config.entriesCount} Entrie(s)`),
       );
-      if(config.errorEntriesUid && Object.keys(config.errorEntriesUid).length > 0) {
-        const failedCTs = Object.keys(config.errorEntriesUid)
+      if (config.errorEntriesUid && Object.keys(config.errorEntriesUid).length > 0) {
+        const failedCTs = Object.keys(config.errorEntriesUid);
         for (const failedCT of failedCTs) {
-          const locales = Object.keys(config.errorEntriesUid[failedCT])
+          const locales = Object.keys(config.errorEntriesUid[failedCT]);
           for (const locale of locales) {
-            console.log(chalk.red(`Faced issue while migrating some entrie(s) for "${failedCT}" Content-type in "${locale}" locale,"${config.errorEntriesUid[failedCT][locale].join(', ')}"`))
+            console.log(
+              chalk.red(
+                `Faced issue while migrating some entrie(s) for "${failedCT}" Content-type in "${locale}" locale,"${config.errorEntriesUid[
+                  failedCT
+                ][locale].join(', ')}"`,
+              ),
+            );
           }
         }
       }
@@ -61,6 +74,10 @@ JsonMigrationCommand.flags = {
     description: 'Alias(name) for the management token',
     required: false,
   }),
+  'stack-api-key': flags.string({
+    description: 'Stack api key to be used',
+    required: false,
+  }),
   'content-type': flags.string({
     description: 'The content type from which entries will be migrated',
     required: false,
@@ -76,6 +93,9 @@ JsonMigrationCommand.flags = {
     default: false,
     required: false,
   }),
+  branch: flags.string({
+    description: '[optional] branch name',
+  }),
   'html-path': flags.string({
     description: 'Provide path of HTML RTE to migrate',
     dependsOn: ['json-path'],
@@ -89,13 +109,14 @@ JsonMigrationCommand.flags = {
   delay: flags.integer({
     description: 'Provide delay in ms between two entry update',
     default: 1000,
-    required: false
+    required: false,
   }),
   locale: flags.string({
-    description : 'The locale from which entries will be migrated',
-    required: false
+    description: 'The locale from which entries will be migrated',
+    required: false,
   }),
-  "batch-limit" : flags.integer({description:'Provide batch limit for updating entries', default: 50 }),
+  'batch-limit': flags.integer({ description: 'Provide batch limit for updating entries', default: 50 }),
+
   //To be deprecated
   configPath: flags.string({
     char: 'p',

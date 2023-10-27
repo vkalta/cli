@@ -1,7 +1,5 @@
-import { Help } from '@oclif/core';
 import * as figlet from 'figlet';
-import { cliux } from '@contentstack/cli-utilities';
-import { CLIConfig } from './interfaces';
+import { cliux, Help } from '@contentstack/cli-utilities';
 export default class MyHelpClass extends Help {
   constructor(config, opts) {
     super(config, opts);
@@ -36,5 +34,28 @@ export default class MyHelpClass extends Help {
     }
 
     super.showCommandHelp(command);
+  }
+
+  formatCommands(commands): string {
+    if (commands.length === 0) return '';
+
+    const body = this.renderList(
+      commands
+        // if aliases do not contain the current command's id it is the main command
+        .filter(c => !c.aliases.some(a => a === c.id))
+        .map(c => {
+          if (this.config.topicSeparator !== ':') c.id = c.id.replace(/:/g, this.config.topicSeparator);
+          // Add aliases at the end of summary
+          const summary = c.aliases.length > 0 ? `${this.summary(c)} (ALIASES: ${c.aliases.join(', ')})` : this.summary(c);
+          return [c.id, summary];
+        }),
+      {
+        spacer: '\n',
+        stripAnsi: this.opts.stripAnsi,
+        indentation: 2
+      }
+    );
+
+    return this.section('COMMANDS', body);
   }
 }

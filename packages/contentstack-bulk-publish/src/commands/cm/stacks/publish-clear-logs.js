@@ -1,12 +1,12 @@
 const fs = require('fs');
-const { Command, flags } = require('@contentstack/cli-command');
-const { cliux, printFlagDeprecation } = require('@contentstack/cli-utilities');
+const { Command } = require('@contentstack/cli-command');
+const { cliux, printFlagDeprecation, flags } = require('@contentstack/cli-utilities');
 
 const { getLogsDirPath } = require('../../../util/logger.js');
 
 class ClearCommand extends Command {
   async run() {
-    const clearFlags = this.parse(ClearCommand).flags;
+    const { flags: clearFlags } = await this.parse(ClearCommand);
     let dirPath = getLogsDirPath();
     if (clearFlags['log-files-count'] || clearFlags.list) {
       this.listFiles(dirPath);

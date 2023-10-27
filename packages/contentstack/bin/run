@@ -1,2 +1,5 @@
 #!/usr/bin/env node
-require('@oclif/command').run().catch(require('@oclif/errors/handle'));
+(async () => {
+  const { execute } = require('@contentstack/cli-utilities');
+  await execute({ type: 'cjs', dir: __dirname });
+})();

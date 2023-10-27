@@ -1,7 +1,13 @@
-
-import { Command, flags } from '@contentstack/cli-command';
+import { Command } from '@contentstack/cli-command';
+import {
+  printFlagDeprecation,
+  flags,
+  isAuthenticated,
+  FlagInput,
+  cliux,
+  configHandler,
+} from '@contentstack/cli-utilities';
 import ContentModelSeeder, { ContentModelSeederOptions } from '../../../seed';
-import { printFlagDeprecation } from '@contentstack/cli-utilities';
 
 export default class SeedCommand extends Command {
   static description = 'Create a stack from existing content types, entries, assets, etc';
@@ -16,7 +22,7 @@ export default class SeedCommand extends Command {
 
   static usage = 'cm:stacks:seed [--repo <value>] [--org <value>] [-k <value>] [-n <value>] [-y <value>] [-s <value>]';
 
-  static flags = {
+  static flags: FlagInput = {
     repo: flags.string({
       char: 'r',
       description: 'GitHub account or GitHub account/repository',
@@ -56,6 +62,7 @@ export default class SeedCommand extends Command {
     yes: flags.string({
       char: 'y',
       required: false,
+      description: '[Optional] Skip stack confirmation',
     }),
 
     //To be deprecated
@@ -67,37 +74,56 @@ export default class SeedCommand extends Command {
       exclusive: ['org', 'name'],
       parse: printFlagDeprecation(['s', 'stack'], ['-k', 'stack-api-key']),
     }),
+    alias: flags.string({
+      char: 'a',
+      description: 'Alias of the management token',
+    }),
   };
 
   static aliases = ['cm:seed'];
 
   async run() {
     try {
-      const { flags: seedFlags } = this.parse(SeedCommand);
+      const { flags: seedFlags } = await this.parse(SeedCommand);
+      const managementTokenAlias = seedFlags.alias;
 
-      if (!this.authToken) {
-        this.error('You need to login, first. See: auth:login --help', {
+      if (!isAuthenticated() && !managementTokenAlias) {
+        this.error('You need to login or provide an alias for the management token. See: auth:login --help', {
           exit: 2,
           suggestions: ['https://www.contentstack.com/docs/developers/cli/authentication/'],
         });
       }
-
       const options: ContentModelSeederOptions = {
+        parent: this,
         cdaHost: this.cdaHost,
         cmaHost: this.cmaHost,
-        authToken: this.authToken,
         gitHubPath: seedFlags.repo,
         orgUid: seedFlags.org,
         stackUid: seedFlags['stack-api-key'] || seedFlags.stack,
         stackName: seedFlags['stack-name'],
         fetchLimit: seedFlags['fetch-limit'],
         skipStackConfirmation: seedFlags['yes'],
+        isAuthenticated: isAuthenticated(),
+        alias: managementTokenAlias,
       };
 
+      const listOfTokens = configHandler.get('tokens');
+
+      if (managementTokenAlias && listOfTokens[managementTokenAlias]) {
+        options.managementToken = listOfTokens[managementTokenAlias].token;
+        options.stackUid = listOfTokens[managementTokenAlias].apiKey;
+      }
+
       const seeder = new ContentModelSeeder(options);
-      return await seeder.run();
+      const result = await seeder.run();
+      return result;
     } catch (error) {
       let errorObj: any = error;
+      if (errorObj.message !== undefined) {
+        cliux.loader();
+        cliux.print(`Error: ${errorObj.message}`, { color: 'red' });
+        this.exit(1);
+      }
       this.error(errorObj, { exit: 1, suggestions: errorObj.suggestions });
     }
   }

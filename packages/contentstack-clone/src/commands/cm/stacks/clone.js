@@ -1,19 +1,19 @@
-const { Command, flags } = require('@contentstack/cli-command');
-const { configHandler } = require('@contentstack/cli-utilities');
+const { Command } = require('@contentstack/cli-command');
+const { configHandler, flags, isAuthenticated, managementSDKClient } = require('@contentstack/cli-utilities');
 const { CloneHandler } = require('../../../lib/util/clone-handler');
-let config = require('../../../lib/util/dummyConfig.json');
 const path = require('path');
 const rimraf = require('rimraf');
 let pathdir = path.join(__dirname.split('src')[0], 'contents');
 const { readdirSync } = require('fs');
+let config = {};
 
 class StackCloneCommand extends Command {
   async run() {
     try {
       let self = this;
-      let _authToken = configHandler.get('authtoken');
-      const cloneCommandFlags = self.parse(StackCloneCommand).flags;
+      const { flags: cloneCommandFlags } = await self.parse(StackCloneCommand);
       const {
+        yes,
         type: cloneType,
         'stack-name': stackName,
         'source-branch': sourceStackBranch,
@@ -27,6 +27,8 @@ class StackCloneCommand extends Command {
 
       const handleClone = async () => {
         const listOfTokens = configHandler.get('tokens');
+
+        config.forceStopMarketplaceAppsPrompt = yes;
 
         if (cloneType) {
           config.cloneType = cloneType;
@@ -67,18 +69,21 @@ class StackCloneCommand extends Command {
         await this.removeContentDirIfNotEmptyBeforeClone(pathdir); // NOTE remove if folder not empty before clone
         this.registerCleanupOnInterrupt(pathdir);
 
-        config.auth_token = _authToken;
+        config.auth_token = configHandler.get('authtoken');
         config.host = this.cmaHost;
         config.cdn = this.cdaHost;
+        config.pathDir = pathdir;
         const cloneHandler = new CloneHandler(config);
-        await cloneHandler.start();
-        let successMessage = 'Stack cloning process have been completed successfully';
-        await this.cleanUp(pathdir, successMessage);
+        const managementAPIClient = await managementSDKClient(config);
+        cloneHandler.setClient(managementAPIClient);
+        cloneHandler.execute().catch((error) => {
+          console.log(error);
+        });
       };
 
       if (sourceManagementTokenAlias && destinationManagementTokenAlias) {
         if (sourceStackBranch || targetStackBranch) {
-          if (_authToken) {
+          if (isAuthenticated()) {
             handleClone();
           } else {
             console.log('Please login to execute this command, csdx auth:login');
@@ -87,16 +92,18 @@ class StackCloneCommand extends Command {
         } else {
           handleClone();
         }
-      } else if (_authToken) {
+      } else if (isAuthenticated()) {
         handleClone();
       } else {
         console.log('Please login to execute this command, csdx auth:login');
         this.exit(1);
       }
     } catch (error) {
-      await this.cleanUp(pathdir);
-      // eslint-disable-next-line no-console
-      console.log(error.message || error);
+      if (error) {
+        await this.cleanUp(pathdir);
+        // eslint-disable-next-line no-console
+        console.log(error.message || error);
+      }
     }
   }
 
@@ -142,25 +149,27 @@ class StackCloneCommand extends Command {
     const interrupt = ['SIGINT', 'SIGQUIT', 'SIGTERM'];
     const exceptions = ['unhandledRejection', 'uncaughtException'];
 
-    const cleanUp = async (exitOrError = null) => {
-      // eslint-disable-next-line no-console
-      console.log('\nCleaning up');
-      await this.cleanUp(pathDir);
-      // eslint-disable-next-line no-console
-      console.log('done');
-      // eslint-disable-next-line no-process-exit
+    const cleanUp = async (exitOrError) => {
+      if (exitOrError) {
+        // eslint-disable-next-line no-console
+        console.log('\nCleaning up');
+        await this.cleanUp(pathDir);
+        // eslint-disable-next-line no-console
+        console.log('done');
+        // eslint-disable-next-line no-process-exit
 
-      if (exitOrError instanceof Promise) {
-        exitOrError.catch((error) => {
-          console.log((error && error.message) || '');
-        });
-      } else if (exitOrError && exitOrError.message) {
-        console.log(exitOrError.message);
-      } else if (exitOrError && exitOrError.errorMessage) {
-        console.log(exitOrError.message);
+        if (exitOrError instanceof Promise) {
+          exitOrError.catch((error) => {
+            console.log((error && error.message) || '');
+          });
+        } else if (exitOrError.message) {
+          console.log(exitOrError.message);
+        } else if (exitOrError.errorMessage) {
+          console.log(exitOrError.message);
+        }
+
+        if (exitOrError === true) process.exit();
       }
-
-      if (exitOrError === true) process.exit();
     };
 
     exceptions.forEach((event) => process.on(event, cleanUp));
@@ -174,7 +183,7 @@ Use this plugin to automate the process of cloning a stack in few steps.
 
 StackCloneCommand.examples = [
   'csdx cm:stacks:clone',
-  'csdx cm:stacks:clone --source-branch <source-branch-name> --target-branch <target-branch-name>',
+  'csdx cm:stacks:clone --source-branch <source-branch-name> --target-branch <target-branch-name> --yes',
   'csdx cm:stacks:clone --source-stack-api-key <apiKey> --destination-stack-api-key <apiKey>',
   'csdx cm:stacks:clone --source-management-token-alias <management token alias> --destination-management-token-alias <management token alias>',
   'csdx cm:stacks:clone --source-branch --target-branch --source-management-token-alias <management token alias> --destination-management-token-alias <management token alias>',
@@ -226,10 +235,15 @@ b) Structure with content (all modules including entries & assets)
     description: 'Destination stack API Key',
   }),
   'import-webhook-status': flags.string({
-    description: 'Webhook state',
+    description: '[Optional] Webhook state',
     options: ['disable', 'current'],
     required: false,
     default: 'disable',
+  }),
+  yes: flags.boolean({
+    char: 'y',
+    required: false,
+    description: '[Optional] Override marketplace prompts',
   }),
 };
 

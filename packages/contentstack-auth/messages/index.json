@@ -1,8 +1,10 @@
 {
+  "CLI_AUTH_LOGIN_ASK_CHANNEL_FOR_OTP": "Please select OTP channel",
   "CLI_AUTH_LOGIN_ENTER_EMAIL_ADDRESS": "Enter your email address",
   "CLI_AUTH_LOGIN_ENTER_PASSWORD": "Enter your password",
   "CLI_AUTH_LOGIN_SUCCESS": "Successfully logged in!!",
   "CLI_AUTH_LOGIN_FAILED": "Login Error",
+  "CLI_AUTH_AUTHENTICATION_FAILED": "You need to login first. See: auth:login --help",
   "CLI_AUTH_LOGIN_DESCRIPTION": "User session login",
   "CLI_AUTH_LOGIN_FLAG_USERNAME": "User name",
   "CLI_AUTH_LOGIN_FLAG_PASSWORD": "Password",
@@ -15,6 +17,7 @@
   "CLI_AUTH_LOGOUT_FAILED": "Error in logout, please login again",
   "CLI_AUTH_LOGOUT_DESCRIPTION": "User session logout",
   "CLI_AUTH_LOGOUT_FLAG_FORCE": "Force logging out for skipping the confirmation",
+  "CLI_AUTH_LOGOUT_ALREADY": "You're already logged out",
   "CLI_AUTH_WHOAMI_LOGGED_IN_AS": "You are currently logged in with email",
   "CLI_AUTH_WHOAMI_FAILED": "Failed to get the current user details",
   "CLI_AUTH_WHOAMI_DESCRIPTION": "Display current users email address",
@@ -43,5 +46,6 @@
   "CLI_AUTH_TOKENS_VALIDATION_INVALID_MANAGEMENT_TOKEN": "Invalid management token",
   "CLI_AUTH_TOKENS_VALIDATION_INVALID_API_KEY": "Invalid api key",
   "CLI_AUTH_EXIT_PROCESS": "Exiting the process...",
-  "CLI_SELECT_TOKEN_TYPE": "Select the type of token to add"
+  "CLI_SELECT_TOKEN_TYPE": "Select the type of token to add",
+  "CLI_AUTH_ENTER_BRANCH": "Enter branch name"
 }

@@ -1,4 +1,5 @@
-const { Command, flags } = require('@contentstack/cli-command');
+const { Command } = require('@contentstack/cli-command');
+const { printFlagDeprecation, flags } = require('@contentstack/cli-utilities');
 const { start } = require('../../../producer/publish-edits');
 const store = require('../../../util/store.js');
 // eslint-disable-next-line node/no-extraneous-require
@@ -6,16 +7,17 @@ const { cliux } = require('@contentstack/cli-utilities');
 const configKey = 'publish_edits_on_env';
 const { prettyPrint, formatError } = require('../../../util');
 const { getStack } = require('../../../util/client.js');
-const { printFlagDeprecation } = require('@contentstack/cli-utilities');
 let config;
 
 class PublishModifiedCommand extends Command {
   async run() {
-    const entryEditsFlags = this.parse(PublishModifiedCommand).flags;
+    const { flags: entryEditsFlags } = await this.parse(PublishModifiedCommand);
     entryEditsFlags.retryFailed = entryEditsFlags['retry-failed'] || entryEditsFlags.retryFailed || false;
     entryEditsFlags.contentTypes = entryEditsFlags['content-types'] || entryEditsFlags.contentTypes;
     entryEditsFlags.bulkPublish = entryEditsFlags['bulk-publish'] || entryEditsFlags.bulkPublish;
     entryEditsFlags.sourceEnv = entryEditsFlags['source-env'] || entryEditsFlags.sourceEnv;
+    entryEditsFlags.apiVersion = entryEditsFlags['api-version'] || '3';
+    delete entryEditsFlags['api-version']
     delete entryEditsFlags['retry-failed'];
     delete entryEditsFlags['content-types'];
     delete entryEditsFlags['bulk-publish'];
@@ -30,25 +32,34 @@ class PublishModifiedCommand extends Command {
     if (this.validate(updatedFlags)) {
       let stack;
       if (!updatedFlags.retryFailed) {
-        if (!updatedFlags.alias) {
-          updatedFlags.alias = await cliux.prompt('Please enter the management token alias to be used');
-        }
-        updatedFlags.bulkPublish = updatedFlags.bulkPublish !== 'false';
-        // Validate management token alias.
-        try {
-          this.getToken(updatedFlags.alias);
-        } catch (error) {
-          this.error(`The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add -a ${updatedFlags.alias}'`, { exit: 2 })
-        }
         config = {
           alias: updatedFlags.alias,
-          host: this.region.cma,
+          host: this.cmaHost,
+          cda: this.cdaHost,
           branch: entryEditsFlags.branch,
         };
-        stack = getStack(config);
+        if (updatedFlags.alias) {
+          try {
+            this.getToken(updatedFlags.alias);
+          } catch (error) {
+            this.error(
+              `The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add -a ${updatedFlags.alias}'`,
+              { exit: 2 },
+            );
+          }
+        } else if (updatedFlags['stack-api-key']) {
+          config.stackApiKey = updatedFlags['stack-api-key'];
+        } else {
+          this.error('Please use `--alias` or `--stack-api-key` to proceed.', { exit: 2 });
+        }
+        updatedFlags.bulkPublish = updatedFlags.bulkPublish !== 'false';
+        stack = await getStack(config);
       }
       if (await this.confirmFlags(updatedFlags)) {
         try {
+          if (process.env.NODE_ENV === 'test') {
+            return;
+          }
           if (!updatedFlags.retryFailed) {
             await start(updatedFlags, stack, config);
           } else {
@@ -115,6 +126,11 @@ But, if retry-failed flag is set, then only a logfile is required
 
 PublishModifiedCommand.flags = {
   alias: flags.string({ char: 'a', description: 'Alias(name) for the management token' }),
+  'stack-api-key': flags.string({
+    char: 'k',
+    description: 'Stack api key to be used',
+    required: false,
+  }),
   retryFailed: flags.string({
     char: 'r',
     description: 'Retry publishing failed entries from the logfile (optional, overrides all other flags)',
@@ -136,6 +152,9 @@ PublishModifiedCommand.flags = {
       "This flag is set to true by default. It indicates that contentstack's bulkpublish API will be used to publish the entries",
     default: 'true',
   }),
+  'api-version': flags.string({
+    description : "API Version to be used. Values [Default: 3, Nested Reference Publishing: 3.2].",
+  }),
   sourceEnv: flags.string({
     char: 's',
     description: 'Environment from which edited entries will be published',
@@ -143,7 +162,7 @@ PublishModifiedCommand.flags = {
     parse: printFlagDeprecation(['-s', '--sourceEnv'], ['--source-env']),
   }),
   'source-env': flags.string({
-    description: 'Environment from which edited entries will be published'
+    description: 'Environment from which edited entries will be published',
   }),
   contentTypes: flags.string({
     char: 't',
@@ -188,10 +207,14 @@ PublishModifiedCommand.examples = [
   '',
   'Using --branch',
   'csdx cm:entries:publish-modified --content-types [CONTENT TYPE 1] [CONTENT TYPE 2] --source-env [SOURCE_ENV] -e [ENVIRONMENT 1] [ENVIRONMENT 2] --locales [LOCALE 1] [LOCALE 2] -a [MANAGEMENT TOKEN ALIAS] --branch [BRANCH NAME]',
+  '',
+  'Using --stack-api-key',
+  'csdx cm:entries:publish-modified --content-types [CONTENT TYPE 1] [CONTENT TYPE 2] --source-env [SOURCE_ENV] -e [ENVIRONMENT 1] [ENVIRONMENT 2] --locales [LOCALE 1] [LOCALE 2] -stack-api-key [STACK API KEY]',
 ];
 
-PublishModifiedCommand.aliases = ['cm:bulk-publish:entry-edits']
+PublishModifiedCommand.aliases = ['cm:bulk-publish:entry-edits'];
 
-PublishModifiedCommand.usage = 'cm:entries:publish-modified [-a <value>] [--retry-failed <value>] [--bulk-publish <value>] [--source-env <value>] [--content-types <value>] [--locales <value>] [-e <value>] [-c <value>] [-y] [--branch <value>]'
+PublishModifiedCommand.usage =
+  'cm:entries:publish-modified [-a <value>] [--retry-failed <value>] [--bulk-publish <value>] [--source-env <value>] [--content-types <value>] [--locales <value>] [-e <value>] [-c <value>] [-y] [--branch <value>]';
 
 module.exports = PublishModifiedCommand;

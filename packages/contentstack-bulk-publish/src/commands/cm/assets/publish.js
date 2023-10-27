@@ -1,94 +1,112 @@
-const { Command, flags } = require('@contentstack/cli-command');
+const { Command } = require('@contentstack/cli-command');
+const { printFlagDeprecation, flags, isAuthenticated } = require('@contentstack/cli-utilities');
 const { start: startPublish } = require('../../../producer/publish-assets');
 const { start: startCrossPublish } = require('../../../producer/cross-publish');
 const store = require('../../../util/store.js');
 const { cliux } = require('@contentstack/cli-utilities');
-const configKey = 'publish_assets';
-const configKeyCrossEnv = 'cross_env_publish';
 const { prettyPrint, formatError } = require('../../../util');
 const { getStack } = require('../../../util/client.js');
-const { printFlagDeprecation } = require('@contentstack/cli-utilities');
 let config;
 
 class AssetsPublishCommand extends Command {
   async run() {
-    const assetsFlags = this.parse(AssetsPublishCommand).flags;
+    const { flags: assetsFlags } = await this.parse(AssetsPublishCommand);
     assetsFlags.retryFailed = assetsFlags['retry-failed'] || assetsFlags.retryFailed || false;
     assetsFlags.folderUid = assetsFlags['folder-uid'] || assetsFlags.folderUid;
     assetsFlags.bulkPublish = assetsFlags['bulk-publish'] || assetsFlags.bulkPublish;
+    assetsFlags.apiVersion = assetsFlags['api-version'] || '3'; // setting default value for apiVersion
+    delete assetsFlags['api-version']
     delete assetsFlags['retry-failed'];
     delete assetsFlags['folder-uid'];
     delete assetsFlags['bulk-publish'];
 
     let updatedFlags;
     try {
-      const storeConfigKey = assetsFlags['source-env'] ? configKeyCrossEnv : configKey
-      updatedFlags = assetsFlags.config ? store.updateMissing(storeConfigKey, assetsFlags) : assetsFlags;
+      const storeConfigKeyName = assetsFlags['source-env'] ? 'cross_env_publish' : 'publish_assets';
+      updatedFlags = assetsFlags.config ? store.updateMissing(storeConfigKeyName, assetsFlags) : assetsFlags;
     } catch (error) {
       this.error(error.message, { exit: 2 });
     }
     if (this.validate(updatedFlags)) {
       let stack;
       if (!updatedFlags.retryFailed) {
-        if (!updatedFlags.alias) {
-          updatedFlags.alias = await cliux.prompt('Please enter the management token alias to be used');
+        config = {
+          host: this.cmaHost,
+          cda: this.cdaHost,
+          branch: assetsFlags.branch,
+        };
+        if (updatedFlags.alias) {
+          // Validate management token alias.
+          try {
+            this.getToken(updatedFlags.alias);
+            config.alias = updatedFlags.alias;
+          } catch (error) {
+            this.error(
+              `The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add -a ${updatedFlags.alias}'`,
+              { exit: 2 },
+            );
+          }
+        } else if (updatedFlags['stack-api-key']) {
+          config.stackApiKey = updatedFlags['stack-api-key'];
+        } else {
+          this.error('Please use `--alias` or `--stack-api-key` to proceed.', { exit: 2 });
         }
         updatedFlags.bulkPublish = updatedFlags.bulkPublish === 'false' ? false : true;
         if (updatedFlags.folderUid === undefined) {
           // set default value for folderUid
           updatedFlags.folderUid = 'cs_root';
         }
-        // Validate management token alias.
-        try {
-          this.getToken(updatedFlags.alias);
-        } catch (error) {
-          this.error(`The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add -a ${updatedFlags.alias}'`, { exit: 2 })
-        }
-        config = {
-          alias: updatedFlags.alias,
-          host: this.region.cma,
-          cda: this.region.cda,
-          branch: assetsFlags.branch,
-        };
-        stack = getStack(config);
+        stack = await getStack(config);
       }
       if (await this.confirmFlags(updatedFlags)) {
         try {
+          if (process.env.NODE_ENV === 'test') {
+            return;
+          }
           const publishFunction = async (func) => {
             if (!updatedFlags.retryFailed) {
-              await func(updatedFlags, stack, config);
+              try {
+                await func(updatedFlags, stack, config);
+              } catch (error) {
+                let message = formatError(error);
+                this.error(message, { exit: 2 });
+              }
             } else {
-              await func(updatedFlags);
+              try {
+                await func(updatedFlags);
+              } catch (error) {
+                let message = formatError(error);
+                this.error(message, { exit: 2 });
+              }
             }
-          }
+          };
 
           if (updatedFlags['source-env']) {
-            updatedFlags.deliveryToken = updatedFlags['delivery-token']
-            updatedFlags.destEnv = updatedFlags.environments
-            updatedFlags.environment = updatedFlags['source-env']
-            updatedFlags.onlyAssets = true
+            updatedFlags.deliveryToken = updatedFlags['delivery-token'];
+            updatedFlags.destEnv = updatedFlags.environments;
+            updatedFlags.environment = updatedFlags['source-env'];
+            updatedFlags.onlyAssets = true;
             if (updatedFlags.locales instanceof Array) {
-              updatedFlags.locales.forEach(locale => {
-                updatedFlags.locale = locale
-                publishFunction(startCrossPublish)
+              updatedFlags.locales.forEach((locale) => {
+                updatedFlags.locale = locale;
+                publishFunction(startCrossPublish);
               });
             } else {
-              updatedFlags.locale = locales
-              publishFunction(startCrossPublish)
+              updatedFlags.locale = locales;
+              publishFunction(startCrossPublish);
             }
-
+          } else {
+            publishFunction(startPublish);
           }
-          else {
-            publishFunction(startPublish)
-          }
-
         } catch (error) {
           let message = formatError(error);
           this.error(message, { exit: 2 });
         }
       } else {
-        this.exit(0);
+        this.error('Confirmation failed');
       }
+    } else {
+      this.error('Validation failed');
     }
   }
 
@@ -99,10 +117,7 @@ class AssetsPublishCommand extends Command {
     }
 
     if (sourceEnv && !deliveryToken) {
-      this.error(
-        'Specify source environment delivery token. Please check --help for more details',
-        { exit: 2 },
-      );
+      this.error('Specify source environment delivery token. Please check --help for more details', { exit: 2 });
     }
 
     if (!environments || environments.length === 0) {
@@ -144,6 +159,11 @@ AssetsPublishCommand.flags = {
     char: 'a',
     description: 'Alias(name) for the management token',
   }),
+  'stack-api-key': flags.string({
+    char: 'k',
+    description: 'Stack api key to be used',
+    required: false,
+  }),
   'retry-failed': flags.string({
     description: 'Retry publishing failed assets from the logfile (optional, will override all other flags)',
   }),
@@ -154,6 +174,7 @@ AssetsPublishCommand.flags = {
   }),
   'folder-uid': flags.string({
     description: '[default: cs_root] Folder-uid from where the assets will be published',
+    exclusive: ['source-env'],
   }),
   'bulk-publish': flags.string({
     description:
@@ -193,18 +214,22 @@ AssetsPublishCommand.flags = {
     description: '[default: cs_root] Folder-uid from where the assets will be published',
     hidden: true,
     parse: printFlagDeprecation(['-u', '--folderUid'], ['--folder-uid']),
+    exclusive: ['source-env'],
   }),
   bulkPublish: flags.string({
     char: 'b',
     description:
       "By default this flag is set as true. It indicates that contentstack's bulkpublish API will be used to publish the entries",
-    // default: 'true',
+    default: 'true',
     hidden: true,
     parse: printFlagDeprecation(['-b', '--bulkPublish'], ['--bulk-publish']),
   }),
+  'api-version': flags.string({
+    description : "API Version to be used. Values [Default: 3, Nested Reference Publishing: 3.2].",
+  }),
   'delivery-token': flags.string({ description: 'Delivery token for source environment' }),
-  'source-env': flags.string({ description: 'Source environment'}),
-  'content-types': flags.string({ description: 'Content types', multiple: true }), // this is a work around, as this command is to be run with entries:publish command and should not break flags check.
+  'source-env': flags.string({ description: 'Source environment' }),
+  'content-types': flags.string({ description: 'Content types', hidden: true, multiple: true }), // this is a work around, as this command is to be run with entries:publish command and should not break flags check.
 };
 
 AssetsPublishCommand.examples = [
@@ -224,10 +249,14 @@ AssetsPublishCommand.examples = [
   '',
   'Using --source-env',
   'csdx cm:assets:publish --environments [ENVIRONMENT 1] [ENVIRONMENT 2] --locales [LOCALE] --alias [MANAGEMENT TOKEN ALIAS] --source-env [SOURCE ENVIRONMENT] --delivery-token [DELIVERY TOKEN]',
+  '',
+  'Using --stack-api-key flag',
+  'csdx cm:assets:publish --environments [ENVIRONMENT 1] [ENVIRONMENT 2] --locales [LOCALE] --stack-api-key [STACK API KEY]',
 ];
 
 AssetsPublishCommand.aliases = ['cm:bulk-publish:assets'];
 
-AssetsPublishCommand.usage = 'cm:assets:publish [-a <value>] [--retry-failed <value>] [-e <value>] [--folder-uid <value>] [--bulk-publish <value>] [-c <value>] [-y] [--locales <value>] [--branch <value>] [--delivery-token <value>] [--source-env <value>] [--content-types <value>]'
+AssetsPublishCommand.usage =
+  'cm:assets:publish [-a <value>] [--retry-failed <value>] [-e <value>] [--folder-uid <value>] [--bulk-publish <value>] [-c <value>] [-y] [--locales <value>] [--branch <value>] [--delivery-token <value>] [--source-env <value>]';
 
 module.exports = AssetsPublishCommand;

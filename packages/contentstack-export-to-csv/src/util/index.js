@@ -1,12 +1,15 @@
-const inquirer = require('inquirer');
-const { HttpClient } = require('@contentstack/cli-utilities');
 const os = require('os');
-const checkboxPlus = require('inquirer-checkbox-plus-prompt');
-const config = require('./config.js');
-const fastcsv = require('fast-csv');
-const mkdirp = require('mkdirp');
 const fs = require('fs');
+const mkdirp = require('mkdirp');
+const find = require('lodash/find');
+const fastcsv = require('fast-csv');
+const inquirer = require('inquirer');
 const debug = require('debug')('export-to-csv');
+const checkboxPlus = require('inquirer-checkbox-plus-prompt');
+
+const config = require('./config.js');
+const { cliux, configHandler } = require('@contentstack/cli-utilities');
+
 const directory = './data';
 const delimeter = os.platform() === 'win32' ? '\\' : '/';
 
@@ -33,62 +36,101 @@ function chooseOrganization(managementAPIClient, action) {
           loop: false,
         },
       ];
-      inquirer.prompt(_chooseOrganization).then(({ chosenOrg }) => {
-        if (chosenOrg === config.cancelString) exitProgram();
-        resolve({ name: chosenOrg, uid: organizations[chosenOrg] });
-      });
+      inquirer
+        .prompt(_chooseOrganization)
+        .then(({ chosenOrg }) => {
+          if (chosenOrg === config.cancelString) exitProgram();
+          resolve({ name: chosenOrg, uid: organizations[chosenOrg] });
+        })
+        .catch(reject);
     } catch (error) {
       reject(error);
     }
   });
 }
 
-function getOrganizations(managementAPIClient) {
-  return new Promise((resolve, reject) => {
-    let result = {};
-
-    managementAPIClient
-      .organization()
-      .fetchAll()
-      .then((organizations) => {
-        organizations.items.forEach((org) => {
-          result[org.name] = org.uid;
-        });
-        resolve(result);
-      })
-      .catch((error) => reject(error));
-  });
+async function getOrganizations(managementAPIClient) {
+  try {
+    return await getOrganizationList(managementAPIClient, { skip: 0, page: 1, limit: 100 }, []);
+  } catch (error) {
+    console.log(error);
+    throw error;
+  }
 }
 
-function getOrganizationsWhereUserIsAdmin(managementAPIClient) {
-  return new Promise((resolve, reject) => {
-    let result = {};
-    managementAPIClient
-      .getUser({ include_orgs_roles: true })
-      .then((response) => {
-        let organizations = response.organizations.filter((org) => {
-          if (org.org_roles) {
-            const org_role = org.org_roles.shift();
-            return org_role.admin;
-          }
-          return org.is_owner === true;
-        });
-        organizations.forEach((org) => {
-          result[org.name] = org.uid;
-        });
-        resolve(result);
-      })
-      .catch((error) => reject(error));
-  });
+async function getOrganizationList(managementAPIClient, params, result = []) {
+  let organizations;
+  const configOrgUid = configHandler.get('oauthOrgUid');
+
+  if (configOrgUid) {
+    organizations = await managementAPIClient.organization(configOrgUid).fetch();
+    result = result.concat([organizations]);
+  } else {
+    organizations = await managementAPIClient.organization().fetchAll({ limit: 100 });
+    result = result.concat(organizations.items);
+  }
+
+  if (!organizations.items || (organizations.items && organizations.items.length < params.limit)) {
+    const orgMap = {};
+    for (const org of result) {
+      orgMap[org.name] = org.uid;
+    }
+    return orgMap;
+  } else {
+    params.skip = params.page * params.limit;
+    params.page++;
+    await wait(200);
+    return getOrganizationList(managementAPIClient, params, result);
+  }
 }
 
-function chooseStack(managementAPIClient, orgUid) {
+async function getOrganizationsWhereUserIsAdmin(managementAPIClient) {
+  try {
+    let result = {};
+    const configOrgUid = configHandler.get('oauthOrgUid');
+
+    if (configOrgUid) {
+      const response = await managementAPIClient.organization(configOrgUid).fetch();
+      result[response.name] = response.uid;
+    } else {
+      const response = await managementAPIClient.getUser({ include_orgs_roles: true });
+      const organizations = response.organizations.filter((org) => {
+        if (org.org_roles) {
+          const org_role = org.org_roles.shift();
+          return org_role.admin;
+        }
+        return org.is_owner === true;
+      });
+
+      organizations.forEach((org) => {
+        result[org.name] = org.uid;
+      });
+  }
+
+    return result;
+  } catch (error) {
+    throw error;
+  }
+}
+
+function chooseStack(managementAPIClient, orgUid, stackApiKey) {
   return new Promise(async (resolve, reject) => {
     try {
       let stacks = await getStacks(managementAPIClient, orgUid);
+
+      if (stackApiKey) {
+        const stackName = Object.keys(stacks).find((key) => stacks[key] === stackApiKey);
+
+        if (stackName) {
+          resolve({ name: stackName, apiKey: stackApiKey });
+        } else {
+          throw new Error('Could not find stack');
+        }
+        return;
+      }
+
       let stackList = Object.keys(stacks);
       stackList.push(config.cancelString);
-
       let _chooseStack = [
         {
           type: 'list',
@@ -98,20 +140,40 @@ function chooseStack(managementAPIClient, orgUid) {
         },
       ];
 
-      inquirer.prompt(_chooseStack).then(({ chosenStack }) => {
-        if (chosenStack === config.cancelString) exitProgram();
-        resolve({ name: chosenStack, apiKey: stacks[chosenStack] });
-      });
+      inquirer
+        .prompt(_chooseStack)
+        .then(({ chosenStack }) => {
+          if (chosenStack === config.cancelString) exitProgram();
+          resolve({ name: chosenStack, apiKey: stacks[chosenStack] });
+        })
+        .catch(reject);
     } catch (error) {
       reject(error);
     }
   });
 }
 
+async function chooseBranch(branchList) {
+  try {
+    const branches = await branchList;
+
+    const branchesArray = branches.map((branch) => branch.uid);
+
+    let _chooseBranch = [
+      {
+        type: 'list',
+        name: 'branch',
+        message: 'Choose a Branch',
+        choices: branchesArray,
+      },
+    ];
+    return await inquirer.prompt(_chooseBranch);
+  } catch (err) {
+    cliux.error(err);
+  }
+}
+
 function getStacks(managementAPIClient, orgUid) {
-  // Adding a query object in query, because it throws an error
-  // the error is coming from query function lib/entity.js, @contentstack/management pacakge
-  // where params.query is being set
   return new Promise((resolve, reject) => {
     let result = {};
     managementAPIClient
@@ -130,34 +192,33 @@ function getStacks(managementAPIClient, orgUid) {
   });
 }
 
-function chooseContentType(stack, skip) {
-  return new Promise(async (resolve) => {
-    let contentTypes = await getContentTypes(stack, skip);
+function chooseContentType(stackAPIClient, skip) {
+  return new Promise(async (resolve, reject) => {
+    let contentTypes = await getContentTypes(stackAPIClient, skip);
     let contentTypesList = Object.values(contentTypes);
-    // contentTypesList.push(config.cancelString)
-
     let _chooseContentType = [
       {
         type: 'checkbox',
-        message: 'Choose Content Type',
+        message: 'Choose Content Type (Press Space to select the content types) ',
         choices: contentTypesList,
         name: 'chosenContentTypes',
         loop: false,
       },
     ];
 
-    inquirer.prompt(_chooseContentType).then(({ chosenContentTypes }) => {
-      resolve(chosenContentTypes);
-    });
+    inquirer
+      .prompt(_chooseContentType)
+      .then(({ chosenContentTypes }) => resolve(chosenContentTypes))
+      .catch(reject);
   });
 }
 
 function chooseInMemContentTypes(contentTypesList) {
-  return new Promise(async (resolve, reject) => {
+  return new Promise((resolve, reject) => {
     let _chooseContentType = [
       {
         type: 'checkbox-plus',
-        message: 'Choose Content Type',
+        message: 'Choose Content Type (Press Space to select the content types)',
         choices: contentTypesList,
         name: 'chosenContentTypes',
         loop: false,
@@ -182,21 +243,24 @@ function chooseInMemContentTypes(contentTypesList) {
         },
       },
     ];
-    inquirer.prompt(_chooseContentType).then(({ chosenContentTypes }) => {
-      if (chosenContentTypes.length === 0) {
-        reject('Please select atleast one content type.');
-      }
-      resolve(chosenContentTypes);
-    });
+    inquirer
+      .prompt(_chooseContentType)
+      .then(({ chosenContentTypes }) => {
+        if (chosenContentTypes.length === 0) {
+          reject('Please select atleast one content type.');
+        }
+        resolve(chosenContentTypes);
+      })
+      .catch(reject);
   });
 }
 
-function getContentTypes(stack, skip) {
+function getContentTypes(stackAPIClient, skip) {
   return new Promise((resolve, reject) => {
     let result = {};
-    stack
+    stackAPIClient
       .contentType()
-      .query({ skip: skip * 100 })
+      .query({ skip: skip * 100, include_branch: true })
       .find()
       .then((contentTypes) => {
         contentTypes.items.forEach((contentType) => {
@@ -204,13 +268,15 @@ function getContentTypes(stack, skip) {
         });
         resolve(result);
       })
-      .catch((error) => reject(error));
+      .catch((error) => {
+        reject(error);
+      });
   });
 }
 
-function chooseLanguage(stack) {
-  return new Promise(async (resolve) => {
-    let languages = await getLanguages(stack);
+function chooseLanguage(stackAPIClient) {
+  return new Promise(async (resolve, reject) => {
+    let languages = await getLanguages(stackAPIClient);
     let languagesList = Object.keys(languages);
     languagesList.push(config.cancelString);
 
@@ -223,17 +289,20 @@ function chooseLanguage(stack) {
       },
     ];
 
-    inquirer.prompt(_chooseLanguage).then(({ chosenLanguage }) => {
-      if (chosenLanguage === config.cancelString) exitProgram();
-      resolve({ name: chosenLanguage, code: languages[chosenLanguage] });
-    });
+    inquirer
+      .prompt(_chooseLanguage)
+      .then(({ chosenLanguage }) => {
+        if (chosenLanguage === config.cancelString) exitProgram();
+        resolve({ name: chosenLanguage, code: languages[chosenLanguage] });
+      })
+      .catch(reject);
   });
 }
 
-function getLanguages(stack) {
+function getLanguages(stackAPIClient) {
   return new Promise((resolve, reject) => {
     let result = {};
-    stack
+    stackAPIClient
       .locale()
       .query()
       .find()
@@ -247,21 +316,21 @@ function getLanguages(stack) {
   });
 }
 
-function getEntries(stack, contentType, language, skip) {
+function getEntries(stackAPIClient, contentType, language, skip, limit) {
   return new Promise((resolve, reject) => {
-    stack
+    stackAPIClient
       .contentType(contentType)
       .entry()
-      .query({ include_publish_details: true, locale: language, skip: skip * 100 })
+      .query({ include_publish_details: true, locale: language, skip: skip * 100, limit: limit, include_workflow: true })
       .find()
       .then((entries) => resolve(entries))
       .catch((error) => reject(error));
   });
 }
 
-function getEntriesCount(stack, contentType, language) {
+function getEntriesCount(stackAPIClient, contentType, language) {
   return new Promise((resolve, reject) => {
-    stack
+    stackAPIClient
       .contentType(contentType)
       .entry()
       .query({ include_publish_details: true, locale: language })
@@ -271,9 +340,9 @@ function getEntriesCount(stack, contentType, language) {
   });
 }
 
-function getEnvironments(stack) {
+function getEnvironments(stackAPIClient) {
   let result = {};
-  return stack
+  return stackAPIClient
     .environment()
     .query()
     .find()
@@ -285,15 +354,13 @@ function getEnvironments(stack) {
     });
 }
 
-function getContentTypeCount(stack) {
+function getContentTypeCount(stackAPIClient) {
   return new Promise((resolve, reject) => {
-    stack
+    stackAPIClient
       .contentType()
       .query()
       .count()
-      .then((contentTypes) => {
-        resolve(contentTypes.content_types);
-      })
+      .then((contentTypes) => resolve(contentTypes.content_types))
       .catch((error) => reject(error));
   });
 }
@@ -304,27 +371,50 @@ function exitProgram() {
   process.exit();
 }
 
+function sanitizeEntries(flatEntry) {
+  // sanitize against CSV Injections
+  const CSVRegex = /^[\\+\\=@\\-]/
+  for (key in flatEntry) {
+    if (typeof flatEntry[key] === 'string' && flatEntry[key].match(CSVRegex)) {
+      flatEntry[key] = flatEntry[key].replace(/\"/g, "\"\"");
+      flatEntry[key] = `"'${flatEntry[key]}"`
+    } else if (typeof flatEntry[key] === 'object') {
+      // convert any objects or arrays to string
+      // to store this data correctly in csv
+      flatEntry[key] = JSON.stringify(flatEntry[key]);
+    }
+  }
+  return flatEntry;
+}
+
 function cleanEntries(entries, language, environments, contentTypeUid) {
   const filteredEntries = entries.filter((entry) => {
-    return entry['locale'] === language && entry.publish_details.length > 0;
+    return entry['locale'] === language;
   });
-
   return filteredEntries.map((entry) => {
     let workflow = '';
     const envArr = [];
-    entry.publish_details.forEach((env) => {
-      envArr.push(JSON.stringify([environments[env['environment']], env['locale']]));
-    });
+    if(entry.publish_details.length) {
+      entry.publish_details.forEach((env) => {
+        envArr.push(JSON.stringify([environments[env['environment']], env['locale'], env['time']]));
+      });
+    }
+
     delete entry.publish_details;
+    delete entry.setWorkflowStage;
     if ('_workflow' in entry) {
-      workflow = entry['_workflow']['name'];
-      delete entry['_workflow'];
+        if(entry._workflow?.name) {
+          workflow = entry['_workflow']['name'];
+          delete entry['_workflow'];
+        }
     }
     entry = flatten(entry);
+    entry = sanitizeEntries(entry);
     entry['publish_details'] = envArr;
     entry['_workflow'] = workflow;
     entry['ACL'] = JSON.stringify({}); // setting ACL to empty obj
     entry['content_type_uid'] = contentTypeUid; // content_type_uid is being returned as 'uid' from the sdk for some reason
+
     // entry['url'] might also be wrong
     delete entry.stackHeaders;
     delete entry.update;
@@ -358,12 +448,12 @@ function write(command, entries, fileName, message) {
     process.chdir(directory);
   }
   // eslint-disable-next-line no-undef
-  command.log(`Writing ${message} to file: ${process.cwd()}${delimeter}${fileName}`);
+  cliux.print(`Writing ${message} to file: ${process.cwd()}${delimeter}${fileName}`);
   fastcsv.writeToPath(fileName, entries, { headers: true });
 }
 
 function startupQuestions() {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let actions = [
       {
         type: 'list',
@@ -372,34 +462,59 @@ function startupQuestions() {
         choices: [config.exportEntries, config.exportUsers, 'Exit'],
       },
     ];
-    inquirer.prompt(actions).then((answers) => {
-      if (answers.action === 'Exit') exitProgram();
-      resolve(answers.action);
-    });
+    inquirer
+      .prompt(actions)
+      .then((answers) => {
+        if (answers.action === 'Exit') exitProgram();
+        resolve(answers.action);
+      })
+      .catch(reject);
   });
 }
 
-function getOrgUsers(managementAPIClient, orgUid, ecsv) {
+function getOrgUsers(managementAPIClient, orgUid) {
   return new Promise((resolve, reject) => {
     managementAPIClient
       .getUser({ include_orgs_roles: true })
-      .then((response) => {
+      .then(async (response) => {
         let organization = response.organizations.filter((org) => org.uid === orgUid).pop();
+        if (!organization) return reject(new Error('Org UID not found.'));
         if (organization.is_owner === true) {
-          let cma = ecsv.region.cma;
-          let authtoken = ecsv.authToken;
-          return HttpClient.create()
-            .headers({ authtoken: authtoken })
-            .get(`${cma}/v3/organizations/${organization.uid}/share`)
-            .then((_response) => resolve({ items: _response.data.shares }));
+          return managementAPIClient
+            .organization(organization.uid)
+            .getInvitations()
+            .then((data) => {
+              resolve({ items: data.items });
+            })
+            .catch(reject);
         }
-        if (!organization.getInvitations) {
+        if (!organization.getInvitations && !find(organization.org_roles, 'admin')) {
           return reject(new Error(config.adminError));
         }
-        organization.getInvitations().then((users) => resolve(users));
+        try {
+          const users = await getUsers(managementAPIClient, organization, { skip: 0, page: 1, limit: 100 });
+          return resolve({ items: users });
+        } catch (error) {
+          return reject(error);
+        }
       })
       .catch((error) => reject(error));
   });
+}
+
+async function getUsers(managementAPIClient, organization, params, result = []) {
+  try {
+    const users = await managementAPIClient.organization(organization.uid).getInvitations(params);
+    if (!users.items || (users.items && !users.items.length)) {
+      return result;
+    } else {
+      result = result.concat(users.items);
+      params.skip = params.page * params.limit;
+      params.page++;
+      await wait(200);
+      return getUsers(managementAPIClient, organization, params, result);
+    }
+  } catch (error) {}
 }
 
 function getMappedUsers(users) {
@@ -426,16 +541,25 @@ function getOrgRoles(managementAPIClient, orgUid, ecsv) {
       .then((response) => {
         let organization = response.organizations.filter((org) => org.uid === orgUid).pop();
         if (organization.is_owner === true) {
-          let cma = ecsv.region.cma;
-          let authtoken = ecsv.authToken;
-          return axios
-            .get(`${cma}/v3/organizations/${organization.uid}/roles`, { headers: { authtoken: authtoken } })
-            .then((_response) => resolve({ items: _response.data.roles }));
+          return managementAPIClient
+            .organization(organization.uid)
+            .roles()
+            .then((roles) => {
+              resolve({ items: roles.items });
+            })
+            .catch(reject);
         }
-        if (!organization.roles) {
+        if (!organization.roles && !find(organization.org_roles, 'admin')) {
           return reject(new Error(config.adminError));
         }
-        organization.roles().then((roles) => resolve(roles));
+
+        managementAPIClient
+          .organization(organization.uid)
+          .roles()
+          .then((roles) => {
+            resolve({ items: roles.items });
+          })
+          .catch(reject);
       })
       .catch((error) => reject(error));
   });
@@ -469,8 +593,8 @@ function cleanOrgUsers(orgUsers, mappedUsers, mappedRoles) {
     formattedUser['Organization Role'] = determineUserOrgRole(user, mappedRoles);
     formattedUser['Status'] = user['status'];
     formattedUser['Invited By'] = invitedBy;
-    formattedUser['Created Time'] = user['created_at'];
-    formattedUser['Updated Time'] = user['updated_at'];
+    formattedUser['Created Time'] = getFormattedDate(user['created_at']);
+    formattedUser['Updated Time'] = getFormattedDate(user['updated_at']);
     userList.push(formattedUser);
   });
   return userList;
@@ -481,6 +605,16 @@ function kebabize(str) {
     .split(' ')
     .map((word) => word.toLowerCase())
     .join('-');
+}
+
+function getFormattedDate(date) {
+  if (!(date instanceof Date)) {
+    date = new Date(date);
+  }
+  const year = date.getFullYear();
+  const month = (1 + date.getMonth()).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+  return month + '/' + day + '/' + year;
 }
 
 // https://stackoverflow.com/questions/19098797/fastest-way-to-flatten-un-flatten-nested-json-objects
@@ -518,19 +652,36 @@ function formatError(error) {
   if (error.errors && Object.keys(error.errors).length > 0) {
     Object.keys(error.errors).forEach((e) => {
       let entity = e;
-      if (e === 'authorization') entity = 'Management Token';
-      if (e === 'api_key') entity = 'Stack API key';
-      if (e === 'uid') entity = 'Content Type';
-      if (e === 'access_token') entity = 'Delivery Token';
+      switch (e) {
+        case 'authorization':
+          entity = 'Management Token';
+          break;
+        case 'api_key':
+          entity = 'Stack API key';
+          break;
+        case 'uid':
+          entity = 'Content Type';
+          break;
+        case 'access_token':
+          entity = 'Delivery Token';
+          break;
+      }
       message += ' ' + [entity, error.errors[e]].join(' ');
     });
   }
   return message;
 }
 
+function wait(time) {
+  return new Promise((res) => {
+    setTimeout(res, time);
+  });
+}
+
 module.exports = {
   chooseOrganization: chooseOrganization,
   chooseStack: chooseStack,
+  chooseBranch: chooseBranch,
   chooseContentType: chooseContentType,
   chooseLanguage: chooseLanguage,
   getEntries: getEntries,

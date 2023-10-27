@@ -1,26 +1,34 @@
-import { Command, flags } from '@contentstack/cli-command';
-import { logger, cliux, configHandler, printFlagDeprecation } from '@contentstack/cli-utilities';
+import { Command } from '@contentstack/cli-command';
+import {
+  cliux,
+  configHandler,
+  printFlagDeprecation,
+  flags,
+  authHandler as oauthHandler,
+  managementSDKClient,
+  FlagInput,
+} from '@contentstack/cli-utilities';
 
 import { authHandler } from '../../utils';
-
-export default class LogoutCommand extends Command {
-  static run; // to fix the test issue
+import { BaseCommand } from '../../base-command';
+export default class LogoutCommand extends BaseCommand<typeof LogoutCommand> {
+  static run;
   static description = 'User session logout';
   static examples = ['$ csdx auth:logout', '$ csdx auth:logout -y', '$ csdx auth:logout --yes'];
 
-  static flags = {
+  static flags: FlagInput = {
     yes: flags.boolean({
       char: 'y',
       description: 'Force log out by skipping the confirmation',
-      // multiple: false,
       required: false,
+      default: false,
     }),
     force: flags.boolean({
       char: 'f',
       description: 'Force log out by skipping the confirmation',
-      // multiple: false,
       required: false,
       hidden: true,
+      default: false,
       parse: printFlagDeprecation(['-f', '--force'], ['-y', '--yes']),
     }),
   };
@@ -28,35 +36,53 @@ export default class LogoutCommand extends Command {
   static aliases = ['logout'];
 
   async run(): Promise<any> {
-    const { flags: logoutFlags } = this.parse(LogoutCommand);
-    authHandler.client = this.managementAPIClient;
-    let confirm = false;
-    confirm =
-      logoutFlags.force || logoutFlags.yes
-        ? true
-        : await cliux.inquire({
-            type: 'confirm',
-            message: 'CLI_AUTH_LOGOUT_CONFIRM',
-            name: 'confirmation',
-          });
+    const { flags: logoutFlags } = await this.parse(LogoutCommand);
+    let confirm = logoutFlags.force === true || logoutFlags.yes === true;
+    if (!confirm) {
+      confirm = await cliux.inquire({
+        type: 'confirm',
+        message: 'CLI_AUTH_LOGOUT_CONFIRM',
+        name: 'confirmation',
+      });
+    }
+
     try {
-      if (this.authToken) {
-        if (confirm) {
-          cliux.loader('CLI_AUTH_LOGOUT_LOADER_START');
-          const authtoken = this.authToken;
-          await authHandler.logout(authtoken);
-          cliux.loader(''); //stops loading
-          logger.info('successfully logged out');
-          cliux.success('CLI_AUTH_LOGOUT_SUCCESS');
+      const managementAPIClient = await managementSDKClient({ host: this.cmaHost, skipTokenValidity: true });
+      authHandler.client = managementAPIClient;
+      if (confirm === true && (await oauthHandler.isAuthenticated())) {
+        cliux.loader('CLI_AUTH_LOGOUT_LOADER_START');
+        if (await oauthHandler.isAuthorisationTypeBasic()) {
+          await authHandler.logout(configHandler.get('authtoken'));
+        } else if (await oauthHandler.isAuthorisationTypeOAuth()) {
+          await oauthHandler.oauthLogout()
         }
+        cliux.loader('');
+        this.logger.info('successfully logged out');
+        cliux.success('CLI_AUTH_LOGOUT_SUCCESS');
+      } else {
+        cliux.success('CLI_AUTH_LOGOUT_ALREADY');
       }
     } catch (error) {
-      logger.error('Logout failed', error.message);
+      let errorMessage = '';
+      if (error) {
+        if (error.message) {
+          if (error.message.message) {
+            errorMessage = error.message.message;
+          } else {
+            errorMessage = error.message;
+          }
+        } else {
+          errorMessage = error;
+        }
+      }
+
+      this.logger.error('Logout failed', errorMessage);
       cliux.print('CLI_AUTH_LOGOUT_FAILED', { color: 'yellow' });
-      cliux.print(error.message, { color: 'red' });
+      cliux.print(errorMessage, { color: 'red' });
     } finally {
-      configHandler.delete('authtoken');
-      configHandler.delete('email');
+      if (confirm === true) {
+        await oauthHandler.setConfigData('logout');
+      }
     }
   }
 }

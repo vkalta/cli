@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 /* eslint-disable node/no-extraneous-require */
-const { Command, flags } = require('@contentstack/cli-command');
+const { Command } = require('@contentstack/cli-command');
+const { printFlagDeprecation, flags } = require('@contentstack/cli-utilities');
 const { start: startPublish } = require('../../../producer/publish-entries');
 const { start: startCrossPublish } = require('../../../producer/cross-publish');
 const store = require('../../../util/store.js');
@@ -9,16 +10,18 @@ const configKey = 'publish_entries';
 const configKeyCrossEnv = 'cross_env_publish';
 const { prettyPrint, formatError } = require('../../../util');
 const { getStack } = require('../../../util/client.js');
-const { printFlagDeprecation } = require('@contentstack/cli-utilities');
 let config;
 
 class PublishEntriesCommand extends Command {
   async run() {
-    const entriesFlags = this.parse(PublishEntriesCommand).flags;
+    const { flags: entriesFlags } = await this.parse(PublishEntriesCommand);
     entriesFlags.retryFailed = entriesFlags['retry-failed'] || entriesFlags.retryFailed || false;
     entriesFlags.contentTypes = entriesFlags['content-types'] || entriesFlags.contentTypes;
     entriesFlags.bulkPublish = entriesFlags['bulk-publish'] || entriesFlags.bulkPublish;
-    entriesFlags.publishAllContentTypes = entriesFlags['publish-all-content-types'] || entriesFlags.publishAllContentTypes || false;
+    entriesFlags.publishAllContentTypes =
+      entriesFlags['publish-all-content-types'] || entriesFlags.publishAllContentTypes || false;
+    entriesFlags.apiVersion = entriesFlags['api-version'] || '3';
+    delete entriesFlags['api-version'];
     delete entriesFlags['retry-failed'];
     delete entriesFlags['content-types'];
     delete entriesFlags['bulk-publish'];
@@ -26,7 +29,7 @@ class PublishEntriesCommand extends Command {
 
     let updatedFlags;
     try {
-      const storeConfigKey = entriesFlags['source-env'] ? configKeyCrossEnv : configKey
+      const storeConfigKey = entriesFlags['source-env'] ? configKeyCrossEnv : configKey;
       updatedFlags = entriesFlags.config ? store.updateMissing(storeConfigKey, entriesFlags) : entriesFlags;
     } catch (error) {
       this.error(error.message, { exit: 2 });
@@ -34,27 +37,34 @@ class PublishEntriesCommand extends Command {
     if (this.validate(updatedFlags)) {
       let stack;
       if (!updatedFlags.retryFailed) {
-        if (!updatedFlags.alias) {
-          updatedFlags.alias = await cliux.prompt('Provide the alias of the management token to use');
-        }
-        updatedFlags.bulkPublish = updatedFlags.bulkPublish !== 'false';
-        // Validate management token alias.
-        try {
-          this.getToken(updatedFlags.alias);
-        } catch (error) {
-          this.error(`The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add -a ${updatedFlags.alias}'`, { exit: 2 })
-        }
         config = {
           alias: updatedFlags.alias,
-          host: this.region.cma,
-          cda: this.region.cda,
+          host: this.cmaHost,
+          cda: this.cdaHost,
           branch: entriesFlags.branch,
         };
-        stack = getStack(config);
+        if (updatedFlags.alias) {
+          try {
+            this.getToken(updatedFlags.alias);
+          } catch (error) {
+            this.error(
+              `The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add -a ${updatedFlags.alias}'`,
+              { exit: 2 },
+            );
+          }
+        } else if (updatedFlags['stack-api-key']) {
+          config.stackApiKey = updatedFlags['stack-api-key'];
+        } else {
+          this.error('Please use `--alias` or `--stack-api-key` to proceed.', { exit: 2 });
+        }
+        updatedFlags.bulkPublish = updatedFlags.bulkPublish !== 'false';
+        stack = await getStack(config);
       }
       if (await this.confirmFlags(updatedFlags)) {
         try {
-
+          if (process.env.NODE_ENV === 'test') {
+            return;
+          }
           const publishFunction = async (func) => {
             // eslint-disable-next-line no-negated-condition
             if (!updatedFlags.retryFailed) {
@@ -62,28 +72,25 @@ class PublishEntriesCommand extends Command {
             } else {
               await func(updatedFlags);
             }
-          }
+          };
 
           if (updatedFlags['source-env']) {
-            updatedFlags.deliveryToken = updatedFlags['delivery-token']
-            updatedFlags.destEnv = updatedFlags.environments
-            updatedFlags.environment = updatedFlags['source-env']
-            updatedFlags.onlyEntries = true
+            updatedFlags.deliveryToken = updatedFlags['delivery-token'];
+            updatedFlags.destEnv = updatedFlags.environments;
+            updatedFlags.environment = updatedFlags['source-env'];
+            updatedFlags.onlyEntries = true;
             if (updatedFlags.locales instanceof Array) {
-              updatedFlags.locales.forEach(locale => {
-                updatedFlags.locale = locale
-                publishFunction(startCrossPublish)
+              updatedFlags.locales.forEach((locale) => {
+                updatedFlags.locale = locale;
+                publishFunction(startCrossPublish);
               });
             } else {
-              updatedFlags.locale = locales
-              publishFunction(startCrossPublish)
+              updatedFlags.locale = locales;
+              publishFunction(startCrossPublish);
             }
-
+          } else {
+            publishFunction(startPublish);
           }
-          else {
-            publishFunction(startPublish)
-          }
-
         } catch (error) {
           let message = formatError(error);
           this.error(message, { exit: 2 });
@@ -94,17 +101,22 @@ class PublishEntriesCommand extends Command {
     }
   }
 
-  validate({ contentTypes, locales, environments, retryFailed, publishAllContentTypes, 'source-env': sourceEnv, 'delivery-token': deliveryToken }) {
+  validate({
+    contentTypes,
+    locales,
+    environments,
+    retryFailed,
+    publishAllContentTypes,
+    'source-env': sourceEnv,
+    'delivery-token': deliveryToken,
+  }) {
     let missing = [];
     if (retryFailed) {
       return true;
     }
 
     if (sourceEnv && !deliveryToken) {
-      this.error(
-        'Specify source environment delivery token. Please check --help for more details',
-        { exit: 2 },
-      );
+      this.error('Specify source environment delivery token. Please check --help for more details', { exit: 2 });
     }
 
     if (publishAllContentTypes && contentTypes && contentTypes.length > 0) {
@@ -149,7 +161,7 @@ class PublishEntriesCommand extends Command {
 
 PublishEntriesCommand.description = `Publish entries from multiple contenttypes to multiple environments and locales
 The publish command is used to publish entries from the specified content types, to the
-specified environments and locales 
+specified environments and locales
 
 Note: Content Types, Environments and Locales are required to execute the command successfully
 But, if retry-failed flag is set, then only a logfile is required
@@ -157,6 +169,10 @@ But, if retry-failed flag is set, then only a logfile is required
 
 PublishEntriesCommand.flags = {
   alias: flags.string({ char: 'a', description: 'Alias(name) for the management token' }),
+  'stack-api-key': flags.string({
+    char: 'k',
+    description: 'Stack api key to be used',
+  }),
   retryFailed: flags.string({
     char: 'r',
     description:
@@ -179,6 +195,9 @@ PublishEntriesCommand.flags = {
     description:
       "This flag is set to true by default. It indicates that contentstack's bulkpublish API will be used to publish the entries",
     default: 'true',
+  }),
+  'api-version': flags.string({
+    description : "API Version to be used. Values [Default: 3, Nested Reference Publishing: 3.2].",
   }),
   'publish-all-content-types': flags.boolean({
     description: '(optional) Publish all contenttypes (cannot be set when contentTypes flag is set)',
@@ -224,7 +243,7 @@ PublishEntriesCommand.flags = {
     parse: printFlagDeprecation(['-B'], ['--branch']),
   }),
   'delivery-token': flags.string({ description: 'Delivery token for source environment' }),
-  'source-env': flags.string({ description: 'Source environment'}),
+  'source-env': flags.string({ description: 'Source environment' }),
 };
 
 PublishEntriesCommand.examples = [
@@ -245,10 +264,14 @@ PublishEntriesCommand.examples = [
   '',
   'Using --source-env',
   'csdx cm:entries:publish --content-types [CONTENT TYPE 1] [CONTENT TYPE 2] -e [ENVIRONMENT 1] [ENVIRONMENT 2] --locales [LOCALE 1] [LOCALE 2] -a [MANAGEMENT TOKEN ALIAS] --source-env [SOURCE ENVIRONMENT] --delivery-token [DELIVERY TOKEN]',
+  '',
+  'Using --stack-api-key',
+  'csdx cm:entries:publish -e [ENVIRONMENT 1] [ENVIRONMENT 2] --locales [LOCALE 1] [LOCALE 2] --stack-api-key [STACK API KEY] --source-env [SOURCE ENVIRONMENT] --delivery-token [DELIVERY TOKEN]',
 ];
 
-PublishEntriesCommand.aliases = ['cm:bulk-publish:entries']
+PublishEntriesCommand.aliases = ['cm:bulk-publish:entries'];
 
-PublishEntriesCommand.usage = 'cm:entries:publish [-a <value>] [--retry-failed <value>] [--bulk-publish <value>] [--publish-all-content-types] [--content-types <value>] [--locales <value>] [-e <value>] [-c <value>] [-y] [--branch <value>] [--delivery-token <value>] [--source-env <value>]'
+PublishEntriesCommand.usage =
+  'cm:entries:publish [-a <value>] [--retry-failed <value>] [--bulk-publish <value>] [--publish-all-content-types] [--content-types <value>] [--locales <value>] [-e <value>] [-c <value>] [-y] [--branch <value>] [--delivery-token <value>] [--source-env <value>]';
 
 module.exports = PublishEntriesCommand;

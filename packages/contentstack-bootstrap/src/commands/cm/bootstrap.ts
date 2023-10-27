@@ -1,8 +1,20 @@
-import { Command, flags } from '@contentstack/cli-command';
-const ContentstackManagementSDK = require('@contentstack/management');
+import { Command } from '@contentstack/cli-command';
+import { resolve } from 'path';
 import Bootstrap, { BootstrapOptions, SeedParams } from '../../bootstrap';
-import { inquireCloneDirectory, inquireApp, inquireAppType } from '../../bootstrap/interactive';
-import { printFlagDeprecation } from '@contentstack/cli-utilities';
+import {
+  inquireCloneDirectory,
+  inquireApp,
+  inquireAppType,
+  inquireLivePreviewSupport,
+} from '../../bootstrap/interactive';
+import {
+  printFlagDeprecation,
+  managementSDKClient,
+  flags,
+  isAuthenticated,
+  FlagInput,
+  configHandler,
+} from '@contentstack/cli-utilities';
 import config, { getAppLevelConfigByName, AppConfig } from '../../config';
 import messageHandler from '../../messages';
 
@@ -19,9 +31,10 @@ export default class BootstrapCommand extends Command {
     '$ csdx cm:bootstrap --app-name "reactjs-starter" --project-dir <path/to/setup/the/app> --org "your-org-uid" --stack-name "stack-name"',
   ];
 
-  static flags = {
+  static flags: FlagInput = {
     'app-name': flags.string({
-      description: 'App name, reactjs-starter, nextjs-starter, gatsby-starter, angular-starter, nuxt-starter',
+      description:
+        'App name, reactjs-starter, nextjs-starter, gatsby-starter, angular-starter, nuxt-starter, vue-starter, stencil-starter',
       multiple: false,
       required: false,
     }),
@@ -58,6 +71,7 @@ export default class BootstrapCommand extends Command {
       exclusive: ['stack-api-key'],
     }),
     yes: flags.string({
+      description: '[Optional] Skip stack confirmation',
       char: 'y',
       required: false,
     }),
@@ -88,27 +102,26 @@ export default class BootstrapCommand extends Command {
       hidden: true,
       parse: printFlagDeprecation(['-s', '--appType'], ['--app-type']),
     }),
+    alias: flags.string({
+      char: 'a',
+      description: 'Alias of the management token',
+    }),
   };
 
-  get managementAPIClient() {
-    this.bootstrapManagementAPIClient = ContentstackManagementSDK.client({
-      host: this.cmaHost,
-      authtoken: this.authToken,
-    });
-
-    return this.bootstrapManagementAPIClient;
-  }
-
   async run() {
-    const bootstrapCommandFlags = this.parse(BootstrapCommand).flags;
-
+    const { flags: bootstrapCommandFlags } = await this.parse(BootstrapCommand);
+    const managementTokenAlias = bootstrapCommandFlags.alias;
     try {
-      if (!this.authToken) {
+      if (!isAuthenticated() && !managementTokenAlias) {
         this.error(messageHandler.parse('CLI_BOOTSTRAP_LOGIN_FAILED'), {
           exit: 2,
           suggestions: ['https://www.contentstack.com/docs/developers/cli/authentication/'],
         });
       }
+
+      this.bootstrapManagementAPIClient = await managementSDKClient({
+        host: this.cmaHost,
+      });
 
       // inquire user inputs
       let appType =
@@ -146,23 +159,34 @@ export default class BootstrapCommand extends Command {
         cloneDirectory = await inquireCloneDirectory();
       }
 
+      cloneDirectory = resolve(cloneDirectory);
+
+      const livePreviewEnabled = bootstrapCommandFlags.yes ? true : await inquireLivePreviewSupport();
+
       const seedParams: SeedParams = {};
       const stackAPIKey = bootstrapCommandFlags['stack-api-key'];
-      const org = bootstrapCommandFlags['org'];
+      const org = bootstrapCommandFlags.org;
       const stackName = bootstrapCommandFlags['stack-name'];
       if (stackAPIKey) seedParams.stackAPIKey = stackAPIKey;
       if (org) seedParams.org = org;
       if (stackName) seedParams.stackName = stackName;
       if (yes) seedParams.yes = yes;
+      if (managementTokenAlias) {
+        seedParams.managementTokenAlias = managementTokenAlias;
+        const listOfTokens = configHandler.get('tokens');
+        const managementToken = listOfTokens[managementTokenAlias].token;
+        seedParams.managementToken = managementToken;
+      }
 
       // initiate bootstrsourceap
       const options: BootstrapOptions = {
         appConfig,
         seedParams,
         cloneDirectory,
-        managementAPIClient: this.managementAPIClient,
+        managementAPIClient: this.bootstrapManagementAPIClient,
         region: this.region,
         appType,
+        livePreviewEnabled,
       };
       const bootstrap = new Bootstrap(options);
       await bootstrap.run();

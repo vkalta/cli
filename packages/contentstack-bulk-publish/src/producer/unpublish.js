@@ -49,7 +49,7 @@ function getQueryParams(filter) {
   return queryString;
 }
 
-function bulkAction(stack, items, bulkUnpublish, environment, locale) {
+function bulkAction(stack, items, bulkUnpublish, environment, locale, apiVersion) {
   return new Promise(async (resolve) => {
     for (let index = 0; index < items.length; index++) {
       changedFlag = true;
@@ -79,6 +79,7 @@ function bulkAction(stack, items, bulkUnpublish, environment, locale) {
             locale: locale,
             environments: [environment],
             stack: stack,
+            apiVersion
           });
           bulkUnPulishAssetSet = [];
         }
@@ -90,6 +91,7 @@ function bulkAction(stack, items, bulkUnpublish, environment, locale) {
             Type: 'entry',
             environments: [environment],
             stack: stack,
+            apiVersion
           });
           bulkUnPublishSet = [];
         }
@@ -100,6 +102,7 @@ function bulkAction(stack, items, bulkUnpublish, environment, locale) {
             locale: locale,
             environments: [environment],
             stack: stack,
+            apiVersion
           });
           bulkUnPulishAssetSet = [];
         }
@@ -111,6 +114,7 @@ function bulkAction(stack, items, bulkUnpublish, environment, locale) {
             Type: 'entry',
             environments: [environment],
             stack: stack,
+            apiVersion
           });
           bulkUnPublishSet = [];
         }
@@ -149,11 +153,17 @@ async function getSyncEntries(
   bulkUnpublish,
   environment,
   deliveryToken,
+  apiVersion,
   paginationToken = null,
 ) {
   return new Promise(async (resolve, reject) => {
     try {
-      const tokenDetails = command.getToken(config.alias);
+      let tokenDetails;
+      if (config.stackApiKey) {
+        tokenDetails = { apiKey: config.stackApiKey };
+      } else {
+        tokenDetails = command.getToken(config.alias);
+      }
       const queryParamsObj = {};
       const pairs = queryParams.split('&');
       for (let i in pairs) {
@@ -167,6 +177,7 @@ async function getSyncEntries(
         environment: queryParamsObj.environment,
         branch: config.branch,
       });
+      Stack.setHost(config.cda)
 
       const syncData = {};
 
@@ -185,14 +196,14 @@ async function getSyncEntries(
       const entriesResponse = await Stack.sync(syncData);
 
       if (entriesResponse.items.length > 0) {
-        await bulkAction(stack, entriesResponse.items, bulkUnpublish, environment, locale);
+        await bulkAction(stack, entriesResponse.items, bulkUnpublish, environment, locale, apiVersion);
       }
       if (entriesResponse.items.length === 0) {
         if (!changedFlag) console.log('No Entries/Assets Found published on specified environment');
         return resolve();
       }
       setTimeout(async () => {
-        await getSyncEntries(stack, config, locale, queryParams, bulkUnpublish, environment, deliveryToken, null);
+        await getSyncEntries(stack, config, locale, queryParams, bulkUnpublish, environment, deliveryToken, apiVersion, null);
       }, 3000);
     } catch (error) {
       reject(error);
@@ -201,7 +212,7 @@ async function getSyncEntries(
 }
 
 async function start(
-  { retryFailed, bulkUnpublish, contentType, locale, environment, deliveryToken, onlyAssets, onlyEntries, f_types },
+  { retryFailed, bulkUnpublish, contentType, locale, environment, deliveryToken, onlyAssets, onlyEntries, f_types, apiVersion },
   stack,
   config,
 ) {
@@ -253,7 +264,7 @@ async function start(
     }
     setConfig(config, bulkUnpublish);
     const queryParams = getQueryParams(filter);
-    await getSyncEntries(stack, config, locale, queryParams, bulkUnpublish, environment, deliveryToken);
+    await getSyncEntries(stack, config, locale, queryParams, bulkUnpublish, environment, deliveryToken, apiVersion);
   }
 }
 

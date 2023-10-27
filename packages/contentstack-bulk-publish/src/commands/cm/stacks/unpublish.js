@@ -1,23 +1,25 @@
 /* eslint-disable no-console */
 /* eslint-disable node/no-extraneous-require */
-const { Command, flags } = require('@contentstack/cli-command');
+const { Command } = require('@contentstack/cli-command');
+const { printFlagDeprecation, cliux, flags } = require('@contentstack/cli-utilities');
 const { start } = require('../../../producer/unpublish');
 const store = require('../../../util/store.js');
 const configKey = 'Unpublish';
 const { prettyPrint, formatError } = require('../../../util');
 const { getStack } = require('../../../util/client.js');
-const { printFlagDeprecation, cliux } = require('@contentstack/cli-utilities');
 let config;
 
 class UnpublishCommand extends Command {
   async run() {
-    const unpublishFlags = this.parse(UnpublishCommand).flags;
+    const { flags: unpublishFlags } = await this.parse(UnpublishCommand);
     unpublishFlags.retryFailed = unpublishFlags['retry-failed'] || unpublishFlags.retryFailed;
     unpublishFlags.bulkUnpublish = unpublishFlags['bulk-unpublish'] || unpublishFlags.bulkUnpublish;
     unpublishFlags.contentType = unpublishFlags['content-type'] || unpublishFlags.contentType;
     unpublishFlags.deliveryToken = unpublishFlags['delivery-token'] || unpublishFlags.deliveryToken;
     unpublishFlags.onlyAssets = unpublishFlags['only-assets'] || unpublishFlags.onlyAssets;
     unpublishFlags.onlyEntries = unpublishFlags['only-entries'] || unpublishFlags.onlyEntries;
+    unpublishFlags.apiVersion = unpublishFlags['api-version'] || '3';
+    delete unpublishFlags['api-version'];
     delete unpublishFlags['retry-failed'];
     delete unpublishFlags['bulk-unpublish'];
     delete unpublishFlags['content-type'];
@@ -35,29 +37,32 @@ class UnpublishCommand extends Command {
     if (this.validate(updatedFlags)) {
       let stack;
       if (!updatedFlags.retryFailed) {
-        if (!updatedFlags.alias) {
-          updatedFlags.alias = await cliux.prompt('Please enter the management token alias to be used');
+        config = {
+          alias: updatedFlags.alias,
+          host: this.cmaHost,
+          cda: this.cdaHost,
+          branch: unpublishFlags.branch,
+        };
+        if (updatedFlags.alias) {
+          try {
+            this.getToken(updatedFlags.alias);
+            config.alias = updatedFlags.alias;
+          } catch (error) {
+            this.error(
+              `The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add -a ${updatedFlags.alias}'`,
+              { exit: 2 },
+            );
+          }
+        } else if (updatedFlags['stack-api-key']) {
+          config.stackApiKey = updatedFlags['stack-api-key'];
+        } else {
+          this.error('Please use `--alias` or `--stack-api-key` to proceed.', { exit: 2 });
         }
         if (!updatedFlags.deliveryToken) {
           updatedFlags.deliveryToken = await cliux.prompt('Enter delivery token of your source environment');
         }
         updatedFlags.bulkUnpublish = updatedFlags.bulkUnpublish === 'false' ? false : true;
-        // Validate management token alias.
-        try {
-          this.getToken(updatedFlags.alias);
-        } catch (error) {
-          this.error(
-            `The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add --alias ${updatedFlags.alias}'`,
-            { exit: 2 },
-          );
-        }
-        config = {
-          alias: updatedFlags.alias,
-          host: this.region.cma,
-          cda: this.region.cda,
-          branch: unpublishFlags.branch,
-        };
-        stack = getStack(config);
+        stack = await getStack(config);
       }
       if (!updatedFlags.deliveryToken && updatedFlags.deliveryToken.length === 0) {
         this.error('Delivery Token is required for executing this command', { exit: 2 });
@@ -65,6 +70,9 @@ class UnpublishCommand extends Command {
 
       if (await this.confirmFlags(updatedFlags)) {
         try {
+          if (process.env.NODE_ENV === 'test') {
+            return;
+          }
           if (!updatedFlags.retryFailed) {
             await start(updatedFlags, stack, config);
           } else {
@@ -159,6 +167,10 @@ UnpublishCommand.flags = {
     char: 'a',
     description: 'Alias(name) for the management token',
   }),
+  'stack-api-key': flags.string({
+    char: 'k',
+    description: 'Stack api key to be used',
+  }),
   environment: flags.string({
     char: 'e',
     description: 'Source Environment',
@@ -189,6 +201,9 @@ UnpublishCommand.flags = {
     description:
       "This flag is set to true by default. It indicates that contentstack's bulkpublish API will be used to unpublish the entries and assets",
     default: 'true',
+  }),
+  'api-version': flags.string({
+    description : "API Version to be used. Values [Default: 3, Nested Reference Publishing: 3.2].",
   }),
   'content-type': flags.string({
     description: 'Content type filter',
@@ -272,6 +287,9 @@ UnpublishCommand.examples = [
   '',
   'Using --branch flag',
   'csdx cm:stacks:unpublish --bulk-unpublish --content-type [CONTENT TYPE] --environment [SOURCE ENV] --locale [LOCALE] --alias [MANAGEMENT TOKEN ALIAS] --delivery-token [DELIVERY TOKEN] --branch [BRANCH NAME]',
+  '',
+  'Using --stack-api-key flag',
+  'csdx cm:stacks:unpublish --bulk-unpublish --content-type [CONTENT TYPE] --environment [SOURCE ENV] --locale [LOCALE] --stack-api-key [STACK API KEY] --delivery-token [DELIVERY TOKEN]',
 ];
 
 UnpublishCommand.aliases = ['cm:bulk-publish:unpublish'];

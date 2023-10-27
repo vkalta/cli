@@ -1,6 +1,6 @@
 /* eslint-disable node/no-extraneous-require */
-const { Command, flags } = require('@contentstack/cli-command');
-const { cliux, printFlagDeprecation } = require('@contentstack/cli-utilities');
+const { Command } = require('@contentstack/cli-command');
+const { cliux, printFlagDeprecation, flags, isAuthenticated } = require('@contentstack/cli-utilities');
 const { start } = require('../../../producer/cross-publish');
 const store = require('../../../util/store.js');
 const configKey = 'cross_env_publish';
@@ -10,7 +10,8 @@ let config;
 
 class CrossPublishCommand extends Command {
   async run() {
-    const crossPublishFlags = this.flagsAdapter(this.parse(CrossPublishCommand).flags);
+    const { flags: _flags } = await this.parse(CrossPublishCommand);
+    const crossPublishFlags = this.flagsAdapter(_flags || {});
     let updatedFlags;
     try {
       updatedFlags = crossPublishFlags.config ? store.updateMissing(configKey, crossPublishFlags) : crossPublishFlags;
@@ -21,26 +22,32 @@ class CrossPublishCommand extends Command {
     if (this.validate(updatedFlags)) {
       let stack;
       if (!updatedFlags.retryFailed) {
-        if (!updatedFlags.alias) {
-          updatedFlags.alias = await cliux.prompt('Please enter the management token alias to be used');
+        config = {
+          host: this.cmaHost,
+          cda: this.cdaHost,
+          branch: crossPublishFlags.branch,
+        };
+        if (updatedFlags.alias) {
+          try {
+            this.getToken(updatedFlags.alias);
+            config.alias = updatedFlags.alias;
+          } catch (error) {
+            this.error(
+              `The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add -a ${updatedFlags.alias}'`,
+              { exit: 2 },
+            );
+          }
+        } else if (updatedFlags['stack-api-key']) {
+          config.stackApiKey = updatedFlags['stack-api-key'];
+        } else {
+          this.error('Please use `--alias` or `--stack-api-key` to proceed.', { exit: 2 });
         }
         if (!updatedFlags.deliveryToken) {
           updatedFlags.deliveryToken = await cliux.prompt('Enter delivery token of your source environment');
         }
         updatedFlags.bulkPublish = updatedFlags.bulkPublish === 'false' ? false : true;
-        // Validate management token alias.
-        try {
-          this.getToken(updatedFlags.alias);
-        } catch (error) {
-          this.error(`The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add -a ${updatedFlags.alias}'`, {exit: 2})
-        }
-        config = {
-          alias: updatedFlags.alias,
-          host: this.region.cma,
-          cda: this.region.cda,
-          branch: crossPublishFlags.branch,
-        };
-        stack = getStack(config);
+
+        stack = await getStack(config);
       }
 
       if (!updatedFlags.deliveryToken && updatedFlags.deliveryToken.length === 0) {
@@ -49,6 +56,9 @@ class CrossPublishCommand extends Command {
 
       if (await this.confirmFlags(updatedFlags)) {
         try {
+          if (process.env.NODE_ENV === 'test') {
+            return;
+          }
           if (!updatedFlags.retryFailed) {
             await start(updatedFlags, stack, config);
           } else {
@@ -112,36 +122,40 @@ class CrossPublishCommand extends Command {
     return cliux.confirm('Do you want to continue with this configuration ? [yes or no]');
   }
 
-  flagsAdapter(flags) {
-    if ('content-type' in flags) {
-      flags.contentType = flags['content-type'];
-      delete flags['content-type'];
+  flagsAdapter(_flags) {
+    if ('content-type' in _flags) {
+      _flags.contentType = _flags['content-type'];
+      delete _flags['content-type'];
     }
-    if ('locales' in flags) {
-      flags.locale = flags.locales;
-      delete flags['locales'];
+    if ('locales' in _flags) {
+      _flags.locale = _flags.locales;
+      delete _flags['locales'];
     }
-    if ('retry-failed' in flags) {
-      flags.retryFailed = flags['retry-failed'];
-      delete flags['retry-failed'];
+    if ('retry-failed' in _flags) {
+      _flags.retryFailed = _flags['retry-failed'];
+      delete _flags['retry-failed'];
     }
-    if ('bulk-publish' in flags) {
-      flags.bulkPublish = flags['bulk-publish'];
-      delete flags['bulk-publish'];
+    if ('bulk-publish' in _flags) {
+      _flags.bulkPublish = _flags['bulk-publish'];
+      delete _flags['bulk-publish'];
     }
-    if ('source-env' in flags) {
-      flags.environment = flags['source-env'];
-      delete flags['source-env'];
+    if ('api-version' in _flags) {
+      _flags.apiVersion = _flags['api-version'] || '3';
+      delete _flags['api-version'];
     }
-    if ('environments' in flags) {
-      flags.destEnv = flags['environments'];
-      delete flags['environments'];
+    if ('source-env' in _flags) {
+      _flags.environment = _flags['source-env'];
+      delete _flags['source-env'];
     }
-    if ('delivery-token' in flags) {
-      flags.deliveryToken = flags['delivery-token'];
-      delete flags['delivery-token'];
+    if ('environments' in _flags) {
+      _flags.destEnv = _flags['environments'];
+      delete _flags['environments'];
     }
-    return flags;
+    if ('delivery-token' in _flags) {
+      _flags.deliveryToken = _flags['delivery-token'];
+      delete _flags['delivery-token'];
+    }
+    return _flags;
   }
 }
 
@@ -154,6 +168,11 @@ But, if retryFailed flag is set, then only a logfile is required
 
 CrossPublishCommand.flags = {
   alias: flags.string({ char: 'a', description: 'Alias(name) for the management token' }),
+  'stack-api-key': flags.string({
+    char: 'k',
+    description: 'Stack api key to be used',
+    required: false,
+  }),
   retryFailed: flags.string({
     char: 'r',
     description: '(optional) Retry publishing failed entries from the logfile (this flag overrides all other flags)',
@@ -175,6 +194,9 @@ CrossPublishCommand.flags = {
     description:
       "This flag is set to true by default. It indicates that contentstack's bulkpublish API will be used to publish the entries",
     default: 'true',
+  }),
+  'api-version': flags.string({
+    description : "API Version to be used. Values [Default: 3, Nested Reference Publishing: 3.2].",
   }),
   contentType: flags.string({
     char: 't',
@@ -212,7 +234,7 @@ CrossPublishCommand.flags = {
     hidden: true,
     parse: printFlagDeprecation(['--destEnv'], ['--environments']),
   }),
-  'environments': flags.string({
+  environments: flags.string({
     description: 'Destination Environments',
     multiple: true,
   }),
@@ -252,8 +274,12 @@ CrossPublishCommand.examples = [
   '',
   'Using --branch flag',
   'csdx cm:bulk-publish:cross-publish --content-type [CONTENT TYPE] --source-env [SOURCE ENV] --environments [DESTINATION ENVIRONMENT] --locales [LOCALE] -a [MANAGEMENT TOKEN ALIAS] --delivery-token [DELIVERY TOKEN] --branch [BRANCH NAME]',
+  '',
+  'Using --stack-api-key flag',
+  'csdx cm:bulk-publish:cross-publish --content-type [CONTENT TYPE] --source-env [SOURCE ENV] --environments [DESTINATION ENVIRONMENT] --locales [LOCALE] --stack-api-key [STACK API KEY] --delivery-token [DELIVERY TOKEN]',
+  '',
 ];
 
-CrossPublishCommand.usage = `cm:bulk-publish:cross-publish [-a <value>] [--retry-failed <value>] [--bulk-publish <value>] [--content-type <value>] [--locales <value>] [--source-env <value>] [--environments <value>] [--delivery-token <value>] [-c <value>] [-y] [--branch <value>] [--onlyAssets] [--onlyEntries]`
+CrossPublishCommand.usage = `cm:bulk-publish:cross-publish [-a <value>] [--retry-failed <value>] [--bulk-publish <value>] [--content-type <value>] [--locales <value>] [--source-env <value>] [--environments <value>] [--delivery-token <value>] [-c <value>] [-y] [--branch <value>] [--onlyAssets] [--onlyEntries]`;
 
 module.exports = CrossPublishCommand;

@@ -1,12 +1,12 @@
 import { Command } from '@contentstack/cli-command';
-import { logger, cliux, configHandler } from '@contentstack/cli-utilities';
-
-export default class TokensListCommand extends Command {
+import { cliux, configHandler } from '@contentstack/cli-utilities';
+import { BaseCommand } from '../../../base-command';
+export default class TokensListCommand extends BaseCommand<typeof TokensListCommand> {
   static aliases = ['tokens'];
   static examples = ['$ csdx auth:tokens'];
   static description = 'Lists all existing tokens added to the session';
   static flags: Record<string, any> = cliux.uxTable.flags(); // use the cli table flags as it displays tokens in table
-  
+
   async run(): Promise<any> {
     try {
       const managementTokens = configHandler.get('tokens');
@@ -22,7 +22,7 @@ export default class TokensListCommand extends Command {
           });
         });
 
-        const { flags } = this.parse(TokensListCommand);
+        const { flags } = await this.parse(TokensListCommand);
 
         cliux.table(
           tokenOptions,
@@ -52,7 +52,7 @@ export default class TokensListCommand extends Command {
         cliux.print('CLI_AUTH_TOKENS_LIST_NO_TOKENS');
       }
     } catch (error) {
-      logger.error('Token list error', error.message);
+      this.logger.error('Token list error', error.message);
       cliux.print('CLI_AUTH_TOKENS_LIST_FAILED', { color: 'yellow' });
       cliux.print(error.message, { color: 'red' });
     }

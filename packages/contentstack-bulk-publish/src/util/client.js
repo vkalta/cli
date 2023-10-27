@@ -1,22 +1,26 @@
-const contentstackSdk = require('@contentstack/management');
+const { managementSDKClient, isAuthenticated } = require('@contentstack/cli-utilities');
 const { Command } = require('@contentstack/cli-command');
 const command = new Command();
 
-const { formatHostname } = require('../util');
-
-function getStack(data) {
-  const tokenDetails = command.getToken(data.alias);
-  const client = contentstackSdk.client({
-    headers: {
-      branch: data.branch,
-    },
-    host: formatHostname(data.host),
-    // eslint-disable-next-line no-unused-vars
-    logHandler: (_level) => {
-      // empty block
-    },
-  });
-  const stack = client.stack({ api_key: tokenDetails.apiKey, management_token: tokenDetails.token });
+async function getStack(data) {
+  const options = {
+    host: data.host,
+    branchName: data.branch,
+  };
+  const stackOptions = {};
+  if (data.alias) {
+    const tokenDetails = command.getToken(data.alias);
+    options.management_token = tokenDetails.token;
+    stackOptions.management_token = tokenDetails.token;
+    stackOptions.api_key = tokenDetails.apiKey;
+  } else if (data.stackApiKey) {
+    if (!isAuthenticated()) {
+      throw new Error('Please login to proceed further. Or use `--alias` instead of `--stack-api-key` to proceed without logging in.')
+    }
+    stackOptions.api_key = data.stackApiKey;
+  }
+  const managementClient = await managementSDKClient(options);
+  const stack = managementClient.stack(stackOptions);
   stack.alias = data.alias;
   stack.host = data.host;
   return stack;

@@ -1,15 +1,17 @@
-import { Command, flags } from '@contentstack/cli-command';
+import { Command } from '@contentstack/cli-command';
 import {
-  logger,
   cliux,
-  CLIError,
   configHandler,
   printFlagDeprecation,
+  flags,
+  FlagInput,
+  HttpClient,
+  messageHandler,
+  Flags,
 } from '@contentstack/cli-utilities';
 import { askTokenType } from '../../../utils/interactive';
-import { tokenValidation } from '../../../utils';
-
-export default class TokensAddCommand extends Command {
+import { BaseCommand } from '../../../base-command';
+export default class TokensAddCommand extends BaseCommand<typeof TokensAddCommand> {
   static description = 'Adds management/delivery tokens to your session to use it with other CLI commands';
 
   static examples = [
@@ -26,8 +28,8 @@ export default class TokensAddCommand extends Command {
     '$ csdx auth:tokens:add --alias <alias> --stack-api-key <stack api key> --delivery -e <environment> --token <delivery token>',
   ];
 
-  static flags = {
-    alias: flags.string({ char: 'a', description: 'Name of the token alias' }),
+  static flags: FlagInput = {
+    alias: Flags.string({ char: 'a', description: 'Name of the token alias' }),
     delivery: flags.boolean({
       char: 'd',
       description: 'Set this flag to save delivery token',
@@ -66,13 +68,19 @@ export default class TokensAddCommand extends Command {
       description: 'Force adding',
       parse: printFlagDeprecation(['-f', '--force'], ['-y', '--yes']),
     }),
+    branch: flags.string({
+      required: false,
+      multiple: false,
+      description: 'Branch name',
+      hidden: true,
+    }),
   };
 
-  static usage = 'auth:tokens:add [-a <value>] [--delivery] [--management] [-e <value>] [-k <value>] [-y] [--token <value>]';
+  static usage =
+    'auth:tokens:add [-a <value>] [--delivery] [--management] [-e <value>] [-k <value>] [-y] [--token <value>]';
 
   async run(): Promise<any> {
-    this.managementAPIClient = { host: this.cmaHost, authtoken: this.authToken };
-    const { flags: addTokenFlags } = this.parse(TokensAddCommand);
+    const { flags: addTokenFlags } = await this.parse(TokensAddCommand);
     let isAliasExist = false;
     const skipAliasReplaceConfirmation = addTokenFlags.force || addTokenFlags.yes;
     let alias = addTokenFlags.alias;
@@ -91,7 +99,7 @@ export default class TokensAddCommand extends Command {
 
     const type = isDelivery || Boolean(environment) ? 'delivery' : 'management';
 
-    logger.info(`adding ${type} token`);
+    this.logger.info(`adding ${type} token`);
 
     try {
       if (!alias) {
@@ -105,32 +113,18 @@ export default class TokensAddCommand extends Command {
           name: 'confirm',
         });
         if (!shouldAliasReplace) {
-          logger.info('Exiting from the process of replacing the token');
+          this.logger.info('Exiting from the process of replacing the token');
           cliux.print('CLI_AUTH_EXIT_PROCESS');
           return;
         }
       }
+
       if (!apiKey) {
         apiKey = await cliux.inquire({ type: 'input', message: 'CLI_AUTH_TOKENS_ADD_ENTER_API_KEY', name: 'apiKey' });
       }
 
-      const apiKeyValidationResult = await tokenValidation.validateAPIKey(this.managementAPIClient, apiKey);
-      if (!apiKeyValidationResult.valid) {
-        throw new CLIError({ message: apiKeyValidationResult.message });
-      }
-
       if (!token) {
         token = await cliux.inquire({ type: 'input', message: 'CLI_AUTH_TOKENS_ADD_ENTER_TOKEN', name: 'token' });
-      }
-
-      let tokenValidationResult;
-      if (type === 'delivery') {
-        tokenValidationResult = await tokenValidation.validateDeliveryToken(this.managementAPIClient, apiKey, token);
-      } else if (type === 'management') {
-        tokenValidationResult = await tokenValidation.validateManagementToken(this.managementAPIClient, apiKey, token);
-      }
-      if (!tokenValidationResult.valid) {
-        throw new CLIError(tokenValidationResult.message);
       }
 
       if (isDelivery && !environment) {
@@ -141,17 +135,18 @@ export default class TokensAddCommand extends Command {
         });
       }
 
-      if (environment) {
-        const envValidationResult = await tokenValidation.validateEnvironment(
-          this.managementAPIClient,
-          apiKey,
-          environment,
-        );
-        if (!envValidationResult.valid) {
-          throw new CLIError(envValidationResult.message);
+      if (type === 'management') {
+        // FIXME - Once the SDK refresh token issue is resolved, need to revert this back to SDK call
+        const httpClient = new HttpClient({ headers: { api_key: apiKey, authorization: token } });
+
+        const response = (await httpClient.get(`https://${this.cmaHost}/v3/environments?limit=1`)).data;
+
+        if (response?.error_code === 105) {
+          throw new Error(messageHandler.parse('CLI_AUTH_TOKENS_VALIDATION_INVALID_MANAGEMENT_TOKEN'));
+        } else if (response?.error_message) {
+          throw new Error(response.error_message);
         }
       }
-
       if (isManagement) {
         configHandler.set(`${configKeyTokens}.${alias}`, { token, apiKey, type });
       } else {
@@ -164,9 +159,9 @@ export default class TokensAddCommand extends Command {
         cliux.success('CLI_AUTH_TOKENS_ADD_SUCCESS');
       }
     } catch (error) {
-      logger.error('token add error', error.message);
+      this.logger.error('token add error', error.message);
       cliux.print('CLI_AUTH_TOKENS_ADD_FAILED', { color: 'yellow' });
-      cliux.print(error.message.message ? error.message.message : error.message, { color: 'red' });
+      cliux.error(error.message.message ? error.message.message : error.message);
     }
   }
 }

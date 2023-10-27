@@ -1,4 +1,4 @@
-import * as inquirer from 'inquirer';
+const inquirer = require('inquirer');
 import { Organization, Stack } from './contentstack/client';
 
 export interface InquireStackResponse {
@@ -19,14 +19,16 @@ export async function inquireRepo(repos: any[]): Promise<{ choice: string }> {
     return { name: formatStackName(r.name), value: extractRepoName(r.html_url) };
   });
 
-  return inquirer.prompt([
+  const response = await inquirer.prompt([
     {
       type: 'list',
       name: 'choice',
       message: 'Select a Stack to Import',
-      choices
-    }
+      choices,
+    },
   ]);
+
+  return response;
 }
 
 export async function inquireOrganization(organizations: Organization[]): Promise<Organization> {
@@ -100,7 +102,7 @@ export async function inquireStack(stacks: Stack[], stackName?: string): Promise
           type: 'input',
           name: 'name',
           message: 'Enter a stack name',
-          validate: function (input) {
+          validate: function (input: string) {
             if (!input || input.trim() === '') {
               return 'Required';
             }

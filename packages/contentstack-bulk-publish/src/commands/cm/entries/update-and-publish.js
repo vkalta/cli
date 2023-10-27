@@ -1,5 +1,5 @@
-const { Command, flags } = require('@contentstack/cli-command');
-const { printFlagDeprecation, cliux } = require('@contentstack/cli-utilities');
+const { Command } = require('@contentstack/cli-command');
+const { printFlagDeprecation, cliux, flags } = require('@contentstack/cli-utilities');
 
 const store = require('../../../util/store.js');
 const { getStack } = require('../../../util/client.js');
@@ -11,10 +11,12 @@ const configKey = 'addFields';
 
 class UpdateAndPublishCommand extends Command {
   async run() {
-    const addFieldsFlags = this.parse(UpdateAndPublishCommand).flags;
+    const { flags: addFieldsFlags } = await this.parse(UpdateAndPublishCommand);
     addFieldsFlags.retryFailed = addFieldsFlags['retry-failed'] || addFieldsFlags.retryFailed || false;
     addFieldsFlags.contentTypes = addFieldsFlags['content-types'] || addFieldsFlags.contentTypes;
     addFieldsFlags.bulkPublish = addFieldsFlags['bulk-publish'] || addFieldsFlags.bulkPublish;
+    addFieldsFlags.apiVersion = addFieldsFlags['api-version'] || '3';
+    delete addFieldsFlags['api-version'];
     delete addFieldsFlags['retry-failed'];
     delete addFieldsFlags['content-types'];
     delete addFieldsFlags['bulk-publish'];
@@ -28,25 +30,30 @@ class UpdateAndPublishCommand extends Command {
     if (this.validate(updatedFlags)) {
       let stack;
       if (!updatedFlags.retryFailed) {
-        if (!updatedFlags.alias) {
-          updatedFlags.alias = await cliux.prompt('Please enter the management token alias to be used');
-        }
-        updatedFlags.bulkPublish = updatedFlags.bulkPublish === 'false' ? false : true;
-        // Validate management token alias.
-        try {
-          this.getToken(updatedFlags.alias);
-        } catch (error) {
-          this.error(
-            `The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add -a ${updatedFlags.alias}'`,
-            { exit: 2 },
-          );
-        }
         config = {
           alias: updatedFlags.alias,
-          host: this.region.cma,
+          host: this.cmaHost,
+          cda: this.cdaHost,
           branch: addFieldsFlags.branch,
         };
-        stack = getStack(config);
+        if (updatedFlags.alias) {
+          try {
+            this.getToken(updatedFlags.alias);
+            config.alias = updatedFlags.alias;
+          } catch (error) {
+            this.error(
+              `The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add -a ${updatedFlags.alias}'`,
+              { exit: 2 },
+            );
+          }
+        } else if (updatedFlags['stack-api-key']) {
+          config.stackApiKey = updatedFlags['stack-api-key'];
+        } else {
+          this.error('Please use `--alias` or `--stack-api-key` to proceed.', { exit: 2 });
+        }
+        updatedFlags.bulkPublish = updatedFlags.bulkPublish === 'false' ? false : true;
+
+        stack = await getStack(config);
       }
       if (await this.confirmFlags(updatedFlags)) {
         try {
@@ -111,36 +118,24 @@ But, if retry-failed flag is set, then only a logfile is required
 
 UpdateAndPublishCommand.flags = {
   alias: flags.string({ char: 'a', description: 'Alias(name) for the management token' }),
+  'stack-api-key': flags.string({
+    char: 'k',
+    description: 'Stack api key to be used',
+  }),
   'retry-failed': flags.string({
     description: 'Retry publishing failed entries from the logfile (optional, overrides all other flags)',
-  }),
-  retryFailed: flags.string({
-    char: 'r',
-    description: 'Retry publishing failed entries from the logfile (optional, overrides all other flags)',
-    hidden: true,
-    parse: printFlagDeprecation(['-r', '--retryFailed'], ['--retry-failed']),
   }),
   'bulk-publish': flags.string({
     description:
       "This flag is set to true by default. It indicates that contentstack's bulkpublish API will be used to publish the entries",
     default: 'true',
   }),
-  bulkPublish: flags.string({
-    char: 'b',
-    description:
-      "This flag is set to true by default. It indicates that contentstack's bulkpublish API will be used to publish the entries",
-    hidden: true,
-    parse: printFlagDeprecation(['-b', '--bulkPublish'], ['--bulk-publish']),
+  'api-version': flags.string({
+    description : "API Version to be used. Values [Default: 3, Nested Reference Publishing: 3.2].",
   }),
   'content-types': flags.string({
     description: 'The Contenttypes from which entries will be published',
     multiple: true,
-  }),
-  contentTypes: flags.string({
-    char: 't',
-    description: 'The Contenttypes from which entries will be published',
-    multiple: true,
-    parse: printFlagDeprecation(['-t', '--contentTypes'], ['--content-types']),
   }),
   environments: flags.string({
     char: 'e',
@@ -165,11 +160,32 @@ UpdateAndPublishCommand.flags = {
     default: false,
     description: 'Update and publish all entries even if no fields have been added',
   }),
+
+  // To be deprecated
+  retryFailed: flags.string({
+    char: 'r',
+    description: 'Retry publishing failed entries from the logfile (optional, overrides all other flags)',
+    hidden: true,
+    parse: printFlagDeprecation(['-r', '--retryFailed'], ['--retry-failed']),
+  }),
+  bulkPublish: flags.string({
+    char: 'b',
+    description:
+      "This flag is set to true by default. It indicates that contentstack's bulkpublish API will be used to publish the entries",
+    hidden: true,
+    parse: printFlagDeprecation(['-b', '--bulkPublish'], ['--bulk-publish']),
+  }),
+  contentTypes: flags.string({
+    char: 't',
+    description: 'The Contenttypes from which entries will be published',
+    multiple: true,
+    parse: printFlagDeprecation(['-t', '--contentTypes'], ['--content-types']),
+  }),
 };
 
 UpdateAndPublishCommand.examples = [
   'General Usage',
-  'csdx cm:entries:update-and-publish --content-types [CONTENT TYPE 1] [CONTENT TYPE 2] -e [ENVIRONMENT 1] [ENVIRONMENT 2] --locale [LOCALE 1] [LOCALE 2] -a [MANAGEMENT TOKEN ALIAS]',
+  'csdx cm:entries:update-and-publish --content-types [CONTENT TYPE 1] [CONTENT TYPE 2] -e [ENVIRONMENT 1] [ENVIRONMENT 2] --locales [LOCALE 1] [LOCALE 2] -a [MANAGEMENT TOKEN ALIAS]',
   '',
   'Using --config or -c flag',
   'Generate a config file at the current working directory using `csdx cm:stacks:publish-configure -a [ALIAS]`',
@@ -180,7 +196,10 @@ UpdateAndPublishCommand.examples = [
   'csdx cm:entries:update-and-publish --retry-failed [LOG FILE NAME]',
   '',
   'Using --branch',
-  'csdx cm:entries:update-and-publish --content-types [CONTENT TYPE 1] [CONTENT TYPE 2] -e [ENVIRONMENT 1] [ENVIRONMENT 2] --locale [LOCALE 1] [LOCALE 2] -a [MANAGEMENT TOKEN ALIAS] --branch [BRANCH NAME]',
+  'csdx cm:entries:update-and-publish --content-types [CONTENT TYPE 1] [CONTENT TYPE 2] -e [ENVIRONMENT 1] [ENVIRONMENT 2] --locales [LOCALE 1] [LOCALE 2] -a [MANAGEMENT TOKEN ALIAS] --branch [BRANCH NAME]',
+  '',
+  'Using --stack-api-key',
+  'csdx cm:entries:update-and-publish --content-types [CONTENT TYPE 1] [CONTENT TYPE 2] -e [ENVIRONMENT 1] [ENVIRONMENT 2] --locales [LOCALE 1] [LOCALE 2] --stack-api-key [STACK API KEY]',
 ];
 
 UpdateAndPublishCommand.aliases = ['cm:bulk-publish:add-fields'];

@@ -1,5 +1,5 @@
-const { Command, flags } = require('@contentstack/cli-command');
-const { cliux, printFlagDeprecation } = require('@contentstack/cli-utilities');
+const { Command } = require('@contentstack/cli-command');
+const { cliux, printFlagDeprecation, flags } = require('@contentstack/cli-utilities');
 
 const store = require('../../../util/store.js');
 const { start } = require('../../../producer/revert');
@@ -10,7 +10,7 @@ const configKey = 'revert';
 
 class RevertCommand extends Command {
   async run() {
-    const revertFlags = this.parse(RevertCommand).flags;
+    const { flags: revertFlags } = await this.parse(RevertCommand);
     revertFlags.retryFailed = revertFlags['retry-failed'] || revertFlags.retryFailed;
     revertFlags.logFile = revertFlags['log-file'] || revertFlags.logFile;
     delete revertFlags['retry-failed'];

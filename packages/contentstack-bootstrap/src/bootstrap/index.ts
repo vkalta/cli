@@ -18,6 +18,7 @@ export interface BootstrapOptions {
   region: any;
   accessToken?: string;
   appType: string;
+  livePreviewEnabled?: boolean;
 }
 
 export interface SeedParams {
@@ -25,6 +26,8 @@ export interface SeedParams {
   org?: string;
   stackName?: string;
   yes?: string;
+  managementTokenAlias?: string | undefined;
+  managementToken?: string | undefined;
 }
 
 /**
@@ -61,7 +64,7 @@ export default class Bootstrap {
   }
 
   async run(): Promise<any> {
-    cliux.loader(messageHandler.parse('CLI_BOOTSTRAP_START_CLONE_APP'))
+    cliux.loader(messageHandler.parse('CLI_BOOTSTRAP_START_CLONE_APP'));
 
     try {
       await this.ghClient.getLatest(this.cloneDirectory);
@@ -78,34 +81,40 @@ export default class Bootstrap {
 
     // seed plugin start
     try {
-      const cmd = ['--repo', this.appConfig.stack]
+      const cmd = ['--repo', this.appConfig.stack];
       if (this.options.seedParams.stackAPIKey) {
-        cmd.push('--stack-api-key', this.options.seedParams.stackAPIKey)
+        cmd.push('--stack-api-key', this.options.seedParams.stackAPIKey);
       }
       if (this.options.seedParams.org) {
-        cmd.push('--org', this.options.seedParams.org)
+        cmd.push('--org', this.options.seedParams.org);
       }
       if (this.options.seedParams.stackName) {
-        cmd.push('-n', this.options.seedParams.stackName)
+        cmd.push('-n', this.options.seedParams.stackName);
       }
       if (this.options.seedParams.yes) {
         cmd.push('-y', this.options.seedParams.yes);
       }
+      if (this.options.seedParams.managementTokenAlias) {
+        cmd.push('--alias', this.options.seedParams.managementTokenAlias);
+      }
+
       const result = await ContentStackSeed.run(cmd);
-      if (result.api_key) {
+      if (result && result.api_key) {
         await setupEnvironments(
           this.managementAPIClient,
           result.api_key,
           this.appConfig,
           this.cloneDirectory,
           this.region,
+          this.options.livePreviewEnabled as boolean,
+          this.options.seedParams.managementToken as string,
         );
       } else {
         throw new Error(messageHandler.parse('CLI_BOOTSTRAP_NO_API_KEY_FOUND'));
       }
-      cliux.print(messageHandler.parse('CLI_BOOTSTRAP_SUCCESS'))
+      cliux.print(messageHandler.parse('CLI_BOOTSTRAP_SUCCESS'));
     } catch (error) {
-      cliux.error(messageHandler.parse('CLI_BOOTSTRAP_STACK_CREATION_FAILED', this.appConfig.stack))
+      cliux.error(messageHandler.parse('CLI_BOOTSTRAP_STACK_CREATION_FAILED', this.appConfig.stack));
     }
   }
 }

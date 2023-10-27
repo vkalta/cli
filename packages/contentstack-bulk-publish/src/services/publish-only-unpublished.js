@@ -11,7 +11,8 @@ const configKey = 'publish_unpublished_env';
 
 async function publishOnlyUnpublishedService(UnpublishedEntriesCommand) {
   let config;
-  const unpublishedEntriesFlags = flagsAdapter(this.parse(UnpublishedEntriesCommand).flags);
+  const _flags = await this.parse(UnpublishedEntriesCommand);
+  const unpublishedEntriesFlags = flagsAdapter(_flags.flags);
   let updatedFlags;
   try {
     updatedFlags = unpublishedEntriesFlags.config
@@ -23,26 +24,29 @@ async function publishOnlyUnpublishedService(UnpublishedEntriesCommand) {
   if (validate.apply(this, [updatedFlags])) {
     let stack;
     if (!updatedFlags.retryFailed) {
-      if (!updatedFlags.alias) {
-        updatedFlags.alias = await cliux.prompt('Please enter the management token alias to be used');
-      }
-      updatedFlags.bulkPublish = updatedFlags.bulkPublish === 'false' ? false : true;
-      // Validate management token alias.
-      try {
-        this.getToken(updatedFlags.alias);
-      } catch (error) {
-        this.error(
-          `The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add -a ${updatedFlags.alias}'`,
-          { exit: 2 },
-        );
-      }
       config = {
         alias: updatedFlags.alias,
-        host: this.region.cma,
+        host: this.cmaHost,
+        cda: this.cdaHost,
         branch: unpublishedEntriesFlags.branch,
       };
-      stack = getStack(config);
+      if (updatedFlags.alias) {
+        try {
+          this.getToken(updatedFlags.alias);
+        } catch (error) {
+          this.error(
+            `The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add -a ${updatedFlags.alias}'`,
+            { exit: 2 },
+          );
+        }
+      } else if (updatedFlags['stack-api-key']) {
+        config.stackApiKey = updatedFlags['stack-api-key'];
+      } else {
+        this.error('Please use `--alias` or `--stack-api-key` to proceed.', { exit: 2 });
+      }
     }
+    updatedFlags.bulkPublish = updatedFlags.bulkPublish === 'false' ? false : true;
+    stack = await getStack(config);
     if (await confirmFlags(updatedFlags)) {
       try {
         if (!updatedFlags.retryFailed) {
@@ -119,6 +123,10 @@ function flagsAdapter(flags) {
   if ('bulk-publish' in flags) {
     flags.bulkPublish = flags['bulk-publish'];
     delete flags['bulk-publish'];
+  }
+  if ('api-version' in flags) {
+    flags.apiVersion = flags['api-version'] || '3';
+    delete flags['api-version'];
   }
   return flags;
 }

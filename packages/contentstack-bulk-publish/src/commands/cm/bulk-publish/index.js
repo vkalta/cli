@@ -1,4 +1,4 @@
-const { Command, flags } = require('@oclif/command');
+const { Command } = require('@contentstack/cli-command');
 
 class HelloCommand extends Command {
   async run() {

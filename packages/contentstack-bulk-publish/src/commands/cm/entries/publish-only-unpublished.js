@@ -1,7 +1,6 @@
 'use strict';
-
-const { Command, flags } = require('@contentstack/cli-command');
-const { printFlagDeprecation } = require('@contentstack/cli-utilities');
+const { Command } = require('@contentstack/cli-command');
+const { printFlagDeprecation, flags } = require('@contentstack/cli-utilities');
 const { publishOnlyUnpublishedService } = require('../../../services/publish-only-unpublished');
 
 class PublishOnlyUnpublished extends Command {
@@ -23,6 +22,10 @@ But, if retry-failed flag is set, then only a logfile is required
 
 PublishOnlyUnpublished.flags = {
   alias: flags.string({ char: 'a', description: 'Alias(name) for the management token' }),
+  'stack-api-key': flags.string({
+    char: 'k',
+    description: 'Stack api key to be used',
+  }),
   retryFailed: flags.string({
     char: 'r',
     hidden: true,
@@ -45,6 +48,9 @@ PublishOnlyUnpublished.flags = {
     description:
       "This flag is set to true by default. It indicates that contentstack's bulkpublish API will be used to publish the entries",
     default: 'true',
+  }),
+  'api-version': flags.string({
+    description : "API Version to be used. Values [Default: 3, Nested Reference Publishing: 3.2].",
   }),
   sourceEnv: flags.string({
     char: 's',
@@ -100,6 +106,9 @@ PublishOnlyUnpublished.examples = [
   '',
   'Using --branch',
   'csdx cm:entries:publish-only-unpublished -b --content-types [CONTENT TYPES] -e [ENVIRONMENTS] --locales LOCALE -a [MANAGEMENT TOKEN ALIAS] --branch [BRANCH NAME] -source-env [SOURCE ENV]',
+  '',
+  'Using --stack-api-key',
+  'csdx cm:entries:publish-only-unpublished -b --content-types [CONTENT TYPES] -e [ENVIRONMENTS] --locales LOCALE -a [MANAGEMENT TOKEN ALIAS] --stack-api-key [STACK API KEY] -source-env [SOURCE ENV]',
 ];
 
 PublishOnlyUnpublished.aliases = ['cm:bulk-publish:unpublished-entries'];

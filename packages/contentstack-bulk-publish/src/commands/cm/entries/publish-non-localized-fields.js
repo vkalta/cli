@@ -1,16 +1,16 @@
-const { Command, flags } = require('@contentstack/cli-command');
+const { Command } = require('@contentstack/cli-command');
 const { start } = require('../../../producer/nonlocalized-field-changes');
 const store = require('../../../util/store.js');
 const { cliux } = require('@contentstack/cli-utilities');
 const configKey = 'nonlocalized_field_changes';
 const { prettyPrint, formatError } = require('../../../util');
 const { getStack } = require('../../../util/client.js');
-const { printFlagDeprecation } = require('@contentstack/cli-utilities');
+const { printFlagDeprecation, flags } = require('@contentstack/cli-utilities');
 let config;
 
 class NonlocalizedFieldChangesCommand extends Command {
   async run() {
-    const nonlocalizedFieldChangesFlags = this.parse(NonlocalizedFieldChangesCommand).flags;
+    const { flags: nonlocalizedFieldChangesFlags } = await this.parse(NonlocalizedFieldChangesCommand);
     nonlocalizedFieldChangesFlags.retryFailed =
       nonlocalizedFieldChangesFlags['retry-failed'] || nonlocalizedFieldChangesFlags.retryFailed || false;
     nonlocalizedFieldChangesFlags.bulkPublish =
@@ -19,7 +19,9 @@ class NonlocalizedFieldChangesCommand extends Command {
       nonlocalizedFieldChangesFlags['source-env'] || nonlocalizedFieldChangesFlags.sourceEnv;
     nonlocalizedFieldChangesFlags.contentTypes =
       nonlocalizedFieldChangesFlags['content-types'] || nonlocalizedFieldChangesFlags.contentTypes;
-
+      nonlocalizedFieldChangesFlags.apiVersion = nonlocalizedFieldChangesFlags['api-version'] || '3';
+      
+    delete nonlocalizedFieldChangesFlags['api-version']
     delete nonlocalizedFieldChangesFlags['retry-failed'];
     delete nonlocalizedFieldChangesFlags['bulk-publish'];
     delete nonlocalizedFieldChangesFlags['source-env'];
@@ -38,24 +40,34 @@ class NonlocalizedFieldChangesCommand extends Command {
       let stack;
       if (!updatedFlags.retryFailed) {
         updatedFlags.bulkPublish = updatedFlags.bulkPublish === 'false' ? false : true;
-        // Validate management token alias.
-        try {
-          this.getToken(updatedFlags.alias);
-        } catch (error) {
-          this.error(
-            `The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add -a ${updatedFlags.alias}'`,
-            { exit: 2 },
-          );
-        }
         config = {
           alias: updatedFlags.alias,
-          host: this.region.cma,
+          host: this.cmaHost,
+          cda: this.cdaHost,
           branch: nonlocalizedFieldChangesFlags.branch,
         };
-        stack = getStack(config);
+        if (updatedFlags.alias) {
+          try {
+            this.getToken(updatedFlags.alias);
+            config.alias = updatedFlags.alias;
+          } catch (error) {
+            this.error(
+              `The configured management token alias ${updatedFlags.alias} has not been added yet. Add it using 'csdx auth:tokens:add -a ${updatedFlags.alias}'`,
+              { exit: 2 },
+            );
+          }
+        } else if (updatedFlags['stack-api-key']) {
+          config.stackApiKey = updatedFlags['stack-api-key'];
+        } else {
+          this.error('Please use `--alias` or `--stack-api-key` to proceed.', { exit: 2 });
+        }
+        stack = await getStack(config);
       }
       if (await this.confirmFlags(updatedFlags)) {
         try {
+          if (process.env.NODE_ENV === 'test') {
+            return;
+          }
           if (!updatedFlags.retryFailed) {
             await start(updatedFlags, stack, config);
           } else {
@@ -105,7 +117,6 @@ class NonlocalizedFieldChangesCommand extends Command {
       return true;
     }
     return cliux.confirm('Do you want to continue with this configuration ? [yes or no]');
-
   }
 }
 
@@ -119,6 +130,11 @@ NonlocalizedFieldChangesCommand.flags = {
   alias: flags.string({
     char: 'a',
     description: 'Alias(name) for the management token',
+  }),
+  'stack-api-key': flags.string({
+    char: 'k',
+    description: 'Stack api key to be used',
+    required: false,
   }),
   'retry-failed': flags.string({
     description: 'Retry publishing failed entries from the logfile',
@@ -170,6 +186,9 @@ NonlocalizedFieldChangesCommand.flags = {
     hidden: true,
     parse: printFlagDeprecation(['-b', '--bulkPublish'], ['--bulk-publish']),
   }),
+  'api-version': flags.string({
+    description : "API Version to be used. Values [Default: 3, Nested Reference Publishing: 3.2].",
+  }),
   sourceEnv: flags.string({
     char: 's',
     description: 'Source Environment',
@@ -199,10 +218,14 @@ NonlocalizedFieldChangesCommand.examples = [
   '',
   'Using --branch flag',
   'csdx cm:entries:publish-non-localized-fields --content-types [CONTENT TYPE 1] [CONTENT TYPE 2] --environments [ENVIRONMENT 1] [ENVIRONMENT 2] --alias [MANAGEMENT TOKEN ALIAS] --source-env [SOURCE ENV] --branch [BRANCH NAME]',
+  '',
+  'Using --stack-api-key flag',
+  'csdx cm:entries:publish-non-localized-fields --content-types [CONTENT TYPE 1] [CONTENT TYPE 2] --environments [ENVIRONMENT 1] [ENVIRONMENT 2] --stack-api-key [STACK API KEY] --source-env [SOURCE ENV]',
 ];
 
 NonlocalizedFieldChangesCommand.aliases = ['cm:bulk-publish:nonlocalized-field-changes'];
 
-NonlocalizedFieldChangesCommand.usage = 'cm:entries:publish-non-localized-fields [-a <value>] [--retry-failed <value>] [--bulk-publish <value>] [--source-env <value>] [--content-types <value>] [-e <value>] [-c <value>] [-y] [--branch <value>]'
+NonlocalizedFieldChangesCommand.usage =
+  'cm:entries:publish-non-localized-fields [-a <value>] [--retry-failed <value>] [--bulk-publish <value>] [--source-env <value>] [--content-types <value>] [-e <value>] [-c <value>] [-y] [--branch <value>]';
 
 module.exports = NonlocalizedFieldChangesCommand;

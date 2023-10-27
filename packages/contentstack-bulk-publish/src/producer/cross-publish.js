@@ -32,7 +32,7 @@ function getQueryParams(filter) {
   return queryString;
 }
 
-async function bulkAction(stack, items, bulkPublish, filter, destEnv) {
+async function bulkAction(stack, items, bulkPublish, filter, destEnv, apiVersion) {
   return new Promise(async (resolve) => {
     for (let index = 0; index < items.length; index++) {
       changedFlag = true;
@@ -62,6 +62,7 @@ async function bulkAction(stack, items, bulkPublish, filter, destEnv) {
             locale: filter.locale,
             environments: destEnv,
             stack: stack,
+            apiVersion
           });
           bulkPublishAssetSet = [];
         }
@@ -73,6 +74,7 @@ async function bulkAction(stack, items, bulkPublish, filter, destEnv) {
             Type: 'entry',
             environments: destEnv,
             stack: stack,
+            apiVersion
           });
           bulkPublishSet = [];
         }
@@ -84,6 +86,7 @@ async function bulkAction(stack, items, bulkPublish, filter, destEnv) {
             locale: filter.locale,
             environments: destEnv,
             stack: stack,
+            apiVersion
           });
           bulkPublishAssetSet = [];
         }
@@ -95,6 +98,7 @@ async function bulkAction(stack, items, bulkPublish, filter, destEnv) {
             Type: 'entry',
             environments: destEnv,
             stack: stack,
+            apiVersion
           });
           bulkPublishSet = [];
         }
@@ -114,6 +118,7 @@ async function bulkAction(stack, items, bulkPublish, filter, destEnv) {
           await assetQueue.Enqueue({
             assetUid: items[index].data.uid,
             publish_details: [items[index].data.publish_details],
+            locale: filter.locale,
             environments: destEnv,
             Type: 'asset',
             stack: stack,
@@ -133,13 +138,19 @@ async function getSyncEntries(
   filter,
   deliveryToken,
   destEnv,
+  apiVersion,
   paginationToken = null,
 ) {
   return new Promise(async (resolve, reject) => {
     try {
-      const tokenDetails = command.getToken(config.alias);
+      let tokenDetails;
+      if (config.stackApiKey) {
+        tokenDetails = { apiKey: config.stackApiKey };
+      } else {
+        tokenDetails = command.getToken(config.alias);
+      }
       const queryParamsObj = {};
-      const pairs = queryParams.split('&');
+      const pairs = queryParams.split('&').filter((e) => e !== null && e !== '' && e !== undefined);
       for (let i in pairs) {
         const split = pairs[i].split('=');
         queryParamsObj[decodeURIComponent(split[0])] = decodeURIComponent(split[1]);
@@ -151,6 +162,7 @@ async function getSyncEntries(
         environment: queryParamsObj.environment,
         branch: config.branch,
       });
+      Stack.setHost(config.cda)
 
       const syncData = {};
 
@@ -169,7 +181,7 @@ async function getSyncEntries(
       const entriesResponse = await Stack.sync(syncData);
 
       if (entriesResponse.items.length > 0) {
-        await bulkAction(stack, entriesResponse.items, bulkPublish, filter, destEnv);
+        await bulkAction(stack, entriesResponse.items, bulkPublish, filter, destEnv, apiVersion);
       }
       if (!entriesResponse.pagination_token) {
         if (!changedFlag) console.log('No Entries/Assets Found published on specified environment');
@@ -184,13 +196,14 @@ async function getSyncEntries(
           filter,
           deliveryToken,
           destEnv,
+          apiVersion,
           entriesResponse.pagination_token,
         );
       }, 3000);
+      return resolve();
     } catch (error) {
       reject(error);
     }
-    return resolve();
   });
 }
 
@@ -223,6 +236,7 @@ async function start(
     onlyEntries,
     destEnv,
     f_types,
+    apiVersion
   },
   stack,
   config,
@@ -244,10 +258,10 @@ async function start(
         return false;
       }
 
-      bulkPublish = retryFailed.match(new RegExp('bulk')) ? true : false;
-      setConfig(config, bulkPublish);
+      const bulkPublishFlag = retryFailed.match(/bulk/) ? true : false;
+      setConfig(config, bulkPublishFlag);
 
-      if (bulkPublish) {
+      if (bulkPublishFlag) {
         await retryFailedLogs(retryFailed, queue, 'bulk');
       } else {
         await retryFailedLogs(retryFailed, { entryQueue, assetQueue }, 'publish');
@@ -274,7 +288,7 @@ async function start(
     setConfig(config, bulkPublish);
     // filter.type = (f_types) ? f_types : types // types mentioned in the config file (f_types) are given preference
     const queryParams = getQueryParams(filter);
-    await getSyncEntries(stack, config, queryParams, bulkPublish, filter, deliveryToken, destEnv);
+    await getSyncEntries(stack, config, queryParams, bulkPublish, filter, deliveryToken, destEnv, apiVersion);
   }
 }
 
